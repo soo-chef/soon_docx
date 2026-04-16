@@ -1,0 +1,18 @@
+# 구글 서비스 계정 키 등 비밀 JSON (*.json 전부 제외 후 설정만 허용)
+*.json
+!config.json
+
+# 로컬 생성물
+output/
+__pycache__/
+*.py[cod]
+.Python
+.venv/
+venv/
+env/
+
+# 에디터 / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
