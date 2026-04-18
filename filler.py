@@ -415,10 +415,77 @@ def _normalize_lo_label_cells_for_pdf(doc: Document):
                     _rewrite_paragraph_text(para, new)
 
 
+def _cell_plain_text(cell) -> str:
+    return ''.join(
+        (run.text or '')
+        for para in cell.paragraphs
+        for run in para.runs
+    )
+
+
+def _set_cell_preferred_width_dxa(cell, twips: int):
+    """셀 선호 너비(twips, dxa). LibreOffice가 좁은 칸에서 글자 단위 줄바꿈할 때 완화."""
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    twips = int(max(400, twips))
+    tc = cell._tc
+    tcPr = tc.tcPr
+    if tcPr is None:
+        tcPr = OxmlElement('w:tcPr')
+        tc.insert(0, tcPr)
+    tcW = tcPr.find(qn('w:tcW'))
+    if tcW is None:
+        tcW = OxmlElement('w:tcW')
+        tcPr.append(tcW)
+    tcW.set(qn('w:w'), str(twips))
+    tcW.set(qn('w:type'), 'dxa')
+
+
+def _twips_for_label_cell(text: str) -> int:
+    """라벨 글자 수에 따른 최소 너비(twips). 템플릿 기본(~1400)보다 넉넉히."""
+    t = (text or '').strip()
+    n = max(2, len(t))
+    # 한글·숫자 혼합 라벨: 글자당 약 320 twips + 여백 (12pt 기준 가늠)
+    return min(5200, max(2800, 320 * n + 400))
+
+
+def _widen_first_column_labels_for_lo_pdf(doc: Document):
+    """
+    각 데이터 행의 첫 번째 셀(라벨 열)만 너비 확대.
+    PDF에서만 세로로 깨지는 경우가 많아 Linux 저장 시에만 호출한다.
+    """
+    from docx.oxml.ns import qn
+
+    if not doc.tables:
+        return
+    table = doc.tables[0]
+    for row in table.rows:
+        cells = _unique_cells(row)
+        n = len(cells)
+        if n < 2 or n not in (2, 3, 4, 8):
+            continue
+        cell0 = cells[0]
+        raw = _cell_plain_text(cell0)
+        if not raw.strip():
+            continue
+        compact = _compact_label_text_for_libreoffice(raw)
+        w = _twips_for_label_cell(compact)
+        cur = cell0._tc.tcPr
+        if cur is not None:
+            tcw = cur.find(qn('w:tcW'))
+            if tcw is not None:
+                cur_w = tcw.get(qn('w:w'))
+                if cur_w and str(cur_w).isdigit() and int(cur_w) >= w:
+                    continue
+        _set_cell_preferred_width_dxa(cell0, w)
+
+
 def save_document(doc: Document, name: str) -> str:
     """output/ 폴더에 저장 후 경로 반환"""
     if platform.system() != 'Windows':
         _normalize_lo_label_cells_for_pdf(doc)
+        _widen_first_column_labels_for_lo_pdf(doc)
     # 파일 이름에 사용 불가 문자 제거
     safe_name = re.sub(r'[\\/:*?"<>|]', '_', name)
     path = os.path.join(OUTPUT_DIR, f'{safe_name}.docx')
