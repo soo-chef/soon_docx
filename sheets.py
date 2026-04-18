@@ -29,7 +29,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def _is_cloud() -> bool:
-    """Streamlit Secrets에 gcp_service_account가 있으면 클라우드 환경으로 판단"""
+    """
+    Secrets에 서비스 계정 블록이 있으면 JSON 파일 대신 Secrets로 인증한다.
+    (Streamlit Cloud뿐 아니라, 로컬에서 .streamlit/secrets.toml을 쓰는 경우도 동일.)
+    """
     try:
         import streamlit as st
         return 'gcp_service_account' in st.secrets
@@ -45,7 +48,7 @@ def load_config(config_path=None):
 
 
 def get_client(config=None):
-    # Streamlit Cloud: Secrets에서 인증 정보 읽기
+    # Secrets 모드: 클라우드 또는 로컬 secrets.toml
     if _is_cloud():
         import streamlit as st
         creds = Credentials.from_service_account_info(
@@ -54,23 +57,42 @@ def get_client(config=None):
         )
         return gspread.authorize(creds)
 
-    # 로컬: JSON 파일에서 읽기
+    # 파일 모드: config.json의 credentials_file → 프로젝트 폴더 기준 JSON
     if config is None:
         config = load_config()
-    creds_path = config['credentials_file']
+    key = 'credentials_file'
+    if key not in config or not str(config.get(key, '')).strip():
+        raise ValueError(
+            f'로컬(파일) 모드: config.json에 "{key}" 항목이 필요합니다 '
+            f'(서비스 계정 JSON 파일명 또는 경로). '
+            f'대신 .streamlit/secrets.toml에 [gcp_service_account]를 두면 Secrets로 인증합니다.'
+        )
+    creds_path = str(config[key]).strip()
     if not os.path.isabs(creds_path):
         creds_path = os.path.join(BASE_DIR, creds_path)
+    if not os.path.isfile(creds_path):
+        raise FileNotFoundError(
+            f'인증 JSON을 찾을 수 없습니다: {creds_path}\n'
+            f'config.json의 "{key}" 값을 확인하세요.'
+        )
     creds = Credentials.from_service_account_file(creds_path, scopes=SCOPES)
     return gspread.authorize(creds)
 
 
 def _get_sheet_id(config=None) -> str:
-    """sheet_id: 클라우드는 Secrets에서, 로컬은 config에서"""
+    """sheet_id: Secrets 모드면 st.secrets, 아니면 config.json"""
     if _is_cloud():
         import streamlit as st
+        if 'sheet_id' not in st.secrets:
+            raise ValueError(
+                'Secrets 모드인데 sheet_id가 없습니다. '
+                'Streamlit Secrets(또는 secrets.toml)에 sheet_id를 추가하세요.'
+            )
         return str(st.secrets['sheet_id'])
     if config is None:
         config = load_config()
+    if 'sheet_id' not in config:
+        raise ValueError('config.json에 sheet_id가 필요합니다.')
     return config['sheet_id']
 
 
