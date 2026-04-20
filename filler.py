@@ -423,19 +423,48 @@ def fill_document(data: dict, config=None) -> Document:
     _set_unit(rows[6][1], v('1일필요열량'), 'kcal')
     _set_unit(rows[6][3], v('1일필요단백질'), 'g')
 
-    # ── 행08: 식사방법 / 식사섭취상태 ──
-    식사방법 = v('식사방법')
-    if 식사방법:
-        _check(rows[8][1], [식사방법])
+    # ── 행08: 식사방법 / 식사섭취상태 (시트: 열별 TRUE 또는 예전 단일 열) ──
+    식사방법_목록 = []
+    if is_true('식사방법_자립식사'):
+        식사방법_목록.append('자립식사')
+    if is_true('식사방법_부분도움'):
+        식사방법_목록.append('부분도움')
+    if is_true('식사방법_완전도움'):
+        식사방법_목록.append('완전도움')
+    식사방법_레거시 = v('식사방법')
+    if 식사방법_목록:
+        _check(rows[8][1], 식사방법_목록)
+    elif 식사방법_레거시:
+        _check(rows[8][1], [식사방법_레거시])
 
-    식사섭취상태 = v('식사섭취상태')
-    if 식사섭취상태:
-        _check(rows[8][3], [식사섭취상태])
+    섭취_목록 = []
+    for col, 라벨 in (
+        ('식사섭취상태_양호', '양호'),
+        ('식사섭취상태_보통', '보통'),
+        ('식사섭취상태_불량', '불량'),
+    ):
+        if is_true(col):
+            섭취_목록.append(라벨)
+    식사섭취_레거시 = v('식사섭취상태')
+    if 섭취_목록:
+        _check(rows[8][3], 섭취_목록)
+    elif 식사섭취_레거시:
+        _check(rows[8][3], [식사섭취_레거시])
 
     # ── 행09: 식사속도 / 도구사용 (다중) ──
-    식사속도 = v('식사속도')
-    if 식사속도:
-        _check(rows[9][1], [식사속도])
+    속도_목록 = []
+    for col, 라벨 in (
+        ('식사속도_양호', '양호'),
+        ('식사속도_보통', '보통'),
+        ('식사속도_불량', '불량'),
+    ):
+        if is_true(col):
+            속도_목록.append(라벨)
+    식사속도_레거시 = v('식사속도')
+    if 속도_목록:
+        _check(rows[9][1], 속도_목록)
+    elif 식사속도_레거시:
+        _check(rows[9][1], [식사속도_레거시])
 
     도구 = []
     if is_true('도구_젓가락'):     도구.append('젓가락')
@@ -471,9 +500,11 @@ def fill_document(data: dict, config=None) -> Document:
     if 배설:
         _check(rows[14][1], [배설])
 
-    # ── 행15: 특이체질 ──
+    # ── 행15: 특이체질 (시트: 없음/있음 열 + 내용) ──
     특이 = v('특이체질내용')
-    if 특이:
+    if is_true('특이체질_없음'):
+        _check(rows[15][1], ['없음'])
+    elif is_true('특이체질_있음') or 특이:
         _check_with_content(rows[15][1], '있음', 특이)
     else:
         _check(rows[15][1], ['없음'])
@@ -484,7 +515,9 @@ def fill_document(data: dict, config=None) -> Document:
 
     # ── 행18: 식품알러지 ──
     알러지 = v('식품알러지내용')
-    if 알러지:
+    if is_true('식품알러지_없음'):
+        _check(rows[18][1], ['없음'])
+    elif is_true('식품알러지_있음') or 알러지:
         _check_with_content(rows[18][1], '있음', 알러지)
     else:
         _check(rows[18][1], ['없음'])
@@ -502,7 +535,7 @@ def fill_document(data: dict, config=None) -> Document:
     if is_true('질환_간질환'):     질환.append('간질환')
     if is_true('질환_암'):         질환.append('암')
     기타질환 = v('질환_기타내용')
-    if 기타질환:
+    if is_true('질환_기타') or 기타질환:
         질환.append('기타')
     if 질환:
         _check(rows[21][1], 질환)
@@ -513,24 +546,37 @@ def fill_document(data: dict, config=None) -> Document:
                 r'기타\(\s*\)', f'기타({기타질환})', para.runs[0].text
             )
 
-    # ── 행22: 현재복용약물 ──
+    # ── 행22: 현재복용약물 (시트: 없음/있음 열 — '악물' 오타 열명도 인식) ──
     약물 = v('복용약물내용')
-    if 약물:
+    복용_없음 = is_true('현재복용약물_없음') or is_true('현재복용악물_없음')
+    복용_있음 = is_true('현재복용약물_있음') or is_true('현재복용악물_있음')
+    if 복용_있음 and 약물:
+        _check_with_content(rows[22][1], '있음', 약물)
+    elif 복용_없음:
+        _check(rows[22][1], ['없음'])
+    elif 약물:
         _check_with_content(rows[22][1], '있음', 약물)
     else:
         _check(rows[22][1], ['없음'])
 
     # ── 행23: 영양관련약물영향 (다중) ──
-    약물영향 = []
-    if is_true('약물영향_식욕저하'): 약물영향.append('식욕저하')
-    if is_true('약물영향_구역구토'): 약물영향.append('구역/구토')
-    if is_true('약물영향_미각변화'): 약물영향.append('미각변화')
-    if is_true('약물영향_흡수장애'): 약물영향.append('흡수장애')
     기타약물영향 = v('약물영향_기타내용')
-    if 기타약물영향:
-        약물영향.append('기타')
-    if not 약물영향:
-        약물영향.append('없음')
+    if is_true('약물영향_없음'):
+        약물영향 = ['없음']
+    else:
+        약물영향 = []
+        if is_true('약물영향_식욕저하'):
+            약물영향.append('식욕저하')
+        if is_true('약물영향_구역구토'):
+            약물영향.append('구역/구토')
+        if is_true('약물영향_미각변화'):
+            약물영향.append('미각변화')
+        if is_true('약물영향_흡수장애'):
+            약물영향.append('흡수장애')
+        if is_true('약물영향_기타') or 기타약물영향:
+            약물영향.append('기타')
+        if not 약물영향:
+            약물영향.append('없음')
     _check(rows[23][1], 약물영향)
     if 기타약물영향:
         para = rows[23][1].paragraphs[0]
@@ -542,6 +588,13 @@ def fill_document(data: dict, config=None) -> Document:
     # ── 행25: 종교 / 금식일기도시간 ──
     종교 = v('종교', '없음') or '없음'
     _check(rows[25][1], [종교])
+    종교_기타상세 = v('종교_기타내용')
+    if 종교_기타상세:
+        para = rows[25][1].paragraphs[0]
+        if para.runs:
+            para.runs[0].text = re.sub(
+                r'기타\(\s*\)', f'기타({종교_기타상세})', para.runs[0].text
+            )
     _set_text(rows[25][3], v('금식일기도시간'))
 
     # ── 행26: 종교적식사제한 ──
@@ -549,16 +602,16 @@ def fill_document(data: dict, config=None) -> Document:
     종교제한내용 = v('종교제한내용')
     _check_with_content(rows[26][1], 종교제한, 종교제한내용)
 
-    # ── 행27: 문화적식습관 ──
+    # ── 행27: 문화적식습관 (시트: 플래그 열 + 내용) ──
     문화 = v('문화적식습관내용')
-    if 문화:
+    if is_true('문화적식습관') or 문화:
         _check_with_content(rows[27][1], '있음', 문화)
     else:
         _check(rows[27][1], ['없음'])
 
-    # ── 행28: 출신지역특성 ──
+    # ── 행28: 출신지역특성 (시트: 출신지역국가특성 + 내용) ──
     출신 = v('출신지역특성내용')
-    if 출신:
+    if is_true('출신지역국가특성') or 출신:
         _check_with_content(rows[28][1], '있음', 출신)
     else:
         _check(rows[28][1], ['해당없음'])
