@@ -725,6 +725,40 @@ def _set_cell_preferred_width_dxa(cell, twips: int):
     tcW.set(qn('w:type'), 'dxa')
 
 
+def _lo_clear_tc_no_wrap_flags(cell):
+    """LibreOffice가 noWrap/tcFitText를 엄격히 적용해 한글 라벨이 세로로 쪼개질 때 제거."""
+    from docx.oxml.ns import qn
+
+    tcPr = cell._tc.tcPr
+    if tcPr is None:
+        return
+    for tag in (qn('w:noWrap'), qn('w:tcFitText')):
+        el = tcPr.find(tag)
+        if el is not None:
+            tcPr.remove(el)
+
+
+def _widen_individual_needs_sublabels_for_lo_pdf(doc: Document):
+    """
+    ▶ 수급자 및 보호자 개별 욕구: 가운데 '수급자'·'보호자' 라벨 열.
+    Word에서는 한 줄로 보이나 LibreOffice PDF는 열을 더 좁게 잡아 글자 단위 줄바꿈이 나는 경우가 있다.
+    """
+    if not doc.tables:
+        return
+    table = doc.tables[0]
+    for row in table.rows:
+        cells = _unique_cells(row)
+        if len(cells) != 3:
+            continue
+        raw = _cell_plain_text(cells[1])
+        compact = re.sub(r'\s+', '', (raw or '').strip())
+        if compact not in ('수급자', '보호자'):
+            continue
+        _lo_clear_tc_no_wrap_flags(cells[1])
+        # ~2.1cm — 세 글자 라벨이 가로로 들어가도록
+        _set_cell_preferred_width_dxa(cells[1], 1200)
+
+
 def _twips_for_label_cell(text: str) -> int:
     """라벨 글자 수에 따른 목표 너비(twips). LibreOffice 첫 열용—과하면 값 칸이 좁아진다."""
     t = (text or '').strip()
@@ -847,6 +881,7 @@ def save_document(doc: Document, name: str) -> str:
         # 예전에는 첫 열·gridCol을 다시 잡는 함수가 있었는데, 템플릿에서 맞춘 열 너비(성명 행 등)가
         # Streamlit(Linux) 저장 시에만 덮어씌워져 로컬(Windows)과 달라지는 문제가 있었다.
         _normalize_lo_label_cells_for_pdf(doc)
+        _widen_individual_needs_sublabels_for_lo_pdf(doc)
         if os.environ.get('SOON_DOCX_LO_GRID_FIX', '').strip() in ('1', 'true', 'yes'):
             _widen_first_column_labels_for_lo_pdf(doc)
             _rebalance_tbl_grid_first_col_for_lo_pdf(doc)
