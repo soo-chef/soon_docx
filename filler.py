@@ -756,7 +756,7 @@ def _widen_individual_needs_sublabels_for_lo_pdf(doc: Document):
             continue
         _lo_clear_tc_no_wrap_flags(cells[1])
         # ~2.1cm — 세 글자 라벨이 가로로 들어가도록
-        _set_cell_preferred_width_dxa(cells[1], 1200)
+        _set_cell_preferred_width_dxa(cells[1], 1500)
 
 
 def _twips_for_label_cell(text: str) -> int:
