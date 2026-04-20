@@ -26,12 +26,15 @@
   행30 (3셀): 개별욕구제목 | 수급자 | [값]
   행31 (3셀): 개별욕구제목 | 보호자 | [값]
   행33 (2셀): 영양사총평 | [값]
+  행34 (1셀): 구역 제목(첨부)
+  행35 (2셀): 식사사진등첨부(라벨) | [이미지 — `식사사진등첨부`·`식사사진등첨부2` URL, 2열이면 같은 줄에 나란히·크기 자동]
 """
+import datetime
+import io
 import os
 import platform
 import re
 import shutil
-import datetime
 import tempfile
 
 from docx import Document
@@ -153,9 +156,230 @@ def _check_with_content(cell, selected_option, content=''):
 # 메인 채우기 함수
 # ─────────────────────────────────────────
 
-def fill_document(data: dict) -> Document:
+_MAX_MEAL_PHOTO_BYTES = 15 * 1024 * 1024
+_MEAL_PHOTO_COL = '식사사진등첨부'
+_MEAL_PHOTO_COL2 = '식사사진등첨부2'
+# 한 장·두 장 모두 세로로 과도하게 늘어나지 않도록 상한 (cm). 2열 나란히 시 각 칸·행 높이 기준.
+_MEAL_SINGLE_MAX_W_CM = 11.5
+_MEAL_SINGLE_MAX_H_CM = 7.0
+_MEAL_PAIR_GAP_CM = 0.45
+_MEAL_PAIR_MAX_EACH_W_CM = 6.35
+_MEAL_PAIR_MAX_H_CM = 5.8
+
+
+def _parse_meal_photo_urls(raw) -> list:
+    """시트 셀 값에서 http(s) URL 목록 추출 (=IMAGE / =HYPERLINK 문자열 지원)."""
+    if raw is None:
+        return []
+    s = str(raw).strip()
+    if not s:
+        return []
+    m = re.match(r'^\s*=IMAGE\s*\(\s*["\']([^"\']+)["\']', s, re.I)
+    if m:
+        s = m.group(1).strip()
+    if s.startswith('='):
+        hm = re.search(r'HYPERLINK\s*\(\s*"([^"]+)"', s, re.I)
+        if hm:
+            s = hm.group(1).strip()
+        else:
+            hm2 = re.search(r"HYPERLINK\s*\(\s*'([^']+)'", s, re.I)
+            if hm2:
+                s = hm2.group(1).strip()
+    out = []
+    for part in re.split(r'[\n\r;,]+', s):
+        p = part.strip()
+        if p.startswith(('http://', 'https://')):
+            out.append(p)
+    return out
+
+
+def _cell_clear_to_single_empty_paragraph(cell):
+    from docx.oxml.ns import qn
+
+    tc = cell._tc
+    for p_el in tc.findall(qn('w:p'))[1:]:
+        tc.remove(p_el)
+    if not cell.paragraphs:
+        cell.add_paragraph()
+        return
+    p0 = cell.paragraphs[0]
+    for r in p0.runs:
+        r.text = ''
+
+
+def _apply_exif_orientation(image_bytes: bytes) -> bytes:
+    """
+    시트/브라우저는 EXIF Orientation을 반영해 보여주지만, python-docx는 무시해
+    가로로 저장된 JPEG이 옆으로 보일 수 있다. 픽셀에 회전을 반영한 뒤 다시 인코딩한다.
+    """
+    try:
+        from PIL import Image, ImageOps
+    except ImportError:
+        return image_bytes
+    try:
+        im = Image.open(io.BytesIO(image_bytes))
+        im = ImageOps.exif_transpose(im)
+        out = io.BytesIO()
+        fmt = (im.format or 'JPEG').upper()
+        if fmt == 'PNG' or im.mode in ('RGBA', 'LA') or (
+            im.mode == 'P' and 'transparency' in im.info
+        ):
+            im.save(out, format='PNG')
+        else:
+            im.convert('RGB').save(out, format='JPEG', quality=92, optimize=True)
+        return out.getvalue()
+    except Exception:
+        return image_bytes
+
+
+def _cell_strip_all_blocks(cell):
+    """셀 안의 문단·중첩 표만 제거한다. w:tcPr(gridSpan 등 병합 정보)은 반드시 유지."""
+    from docx.oxml.ns import qn
+
+    tc = cell._tc
+    block_tags = {qn('w:p'), qn('w:tbl')}
+    for child in list(tc):
+        if child.tag in block_tags:
+            tc.remove(child)
+
+
+def _meal_image_dims_cm(data: bytes, max_w_cm: float, max_h_cm: float):
+    """비율 유지한 채 직사각형 (max_w_cm × max_h_cm) 안에 맞는 가로·세로."""
+    from docx.shared import Cm
+
+    try:
+        from PIL import Image
+
+        im = Image.open(io.BytesIO(data))
+        wpx, hpx = im.size
+        if wpx <= 0 or hpx <= 0:
+            raise ValueError('bad image size')
+    except Exception:
+        s = min(max_w_cm, max_h_cm) * 0.55
+        return Cm(s), Cm(s)
+
+    aw = max_w_cm
+    ah = max_h_cm
+    aspect = wpx / hpx
+    box = aw / ah
+    if aspect > box:
+        wc = aw
+        hc = aw / aspect
+    else:
+        hc = ah
+        wc = ah * aspect
+    return Cm(wc), Cm(hc)
+
+
+def _insert_meal_photos_cell(cell, raw_primary, raw_secondary=None, config=None):
+    """
+    식사사진등첨부 칸에 이미지 삽입.
+    1열만 있으면 세로로 쌓음. 2열 URL이 모두 있으면 같은 행에 나란히(가운데 간격),
+    인덱스별로 짝을 맞춤. 크기는 상한 안에서 자동 축소(2페이지 내 쓰기 목적).
+    """
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Cm, Pt
+
+    urls_p = _parse_meal_photo_urls(raw_primary)
+    urls_s = (
+        _parse_meal_photo_urls(raw_secondary)
+        if raw_secondary is not None and str(raw_secondary).strip()
+        else []
+    )
+    if not urls_p and not urls_s:
+        return
+
+    import sheets
+
+    try:
+        creds = sheets.build_credentials(config)
+    except Exception:
+        creds = None
+
+    def fetch_one(url):
+        try:
+            return sheets.fetch_image_bytes(url, creds)
+        except Exception:
+            try:
+                return sheets.fetch_image_bytes(url, None)
+            except Exception:
+                return None
+
+    imgs_p = []
+    for url in urls_p:
+        data = fetch_one(url)
+        if not data or len(data) > _MAX_MEAL_PHOTO_BYTES:
+            continue
+        data = _apply_exif_orientation(data)
+        imgs_p.append(data)
+
+    imgs_s = []
+    for url in urls_s:
+        data = fetch_one(url)
+        if not data or len(data) > _MAX_MEAL_PHOTO_BYTES:
+            continue
+        data = _apply_exif_orientation(data)
+        imgs_s.append(data)
+
+    if not imgs_p and not imgs_s:
+        return
+
+    # 셀 안에 중첩 표를 넣으면 Word가 부모 표의 열 그리드를 다시 잡아 위쪽 행이 깨질 수 있어,
+    # 문단 인라인(그림 run 나란히)만 사용한다.
+    _cell_strip_all_blocks(cell)
+
+    n = max(len(imgs_p), len(imgs_s))
+    has_secondary_column = len(imgs_s) > 0
+
+    for i in range(n):
+        left = imgs_p[i] if i < len(imgs_p) else None
+        right = imgs_s[i] if i < len(imgs_s) else None
+
+        para = cell.add_paragraph()
+        if i > 0:
+            para.paragraph_format.space_before = Pt(3)
+            para.paragraph_format.space_after = Pt(0)
+
+        if left is not None and right is not None and has_secondary_column:
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            w1, h1 = _meal_image_dims_cm(left, _MEAL_PAIR_MAX_EACH_W_CM, _MEAL_PAIR_MAX_H_CM)
+            w2, h2 = _meal_image_dims_cm(right, _MEAL_PAIR_MAX_EACH_W_CM, _MEAL_PAIR_MAX_H_CM)
+            r1 = para.add_run()
+            try:
+                r1.add_picture(io.BytesIO(left), width=w1, height=h1)
+            except Exception:
+                pass
+            # 고정 폭 공백으로 간격 (중첩 표 없이)
+            para.add_run('\u2003\u2003')
+            r2 = para.add_run()
+            try:
+                r2.add_picture(io.BytesIO(right), width=w2, height=h2)
+            except Exception:
+                pass
+
+        elif left is not None:
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            w, h = _meal_image_dims_cm(left, _MEAL_SINGLE_MAX_W_CM, _MEAL_SINGLE_MAX_H_CM)
+            run = para.add_run()
+            try:
+                run.add_picture(io.BytesIO(left), width=w, height=h)
+            except Exception:
+                pass
+
+        elif right is not None:
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            w, h = _meal_image_dims_cm(right, _MEAL_SINGLE_MAX_W_CM, _MEAL_SINGLE_MAX_H_CM)
+            run = para.add_run()
+            try:
+                run.add_picture(io.BytesIO(right), width=w, height=h)
+            except Exception:
+                pass
+
+
+def fill_document(data: dict, config=None) -> Document:
     """
     data: 구글 시트 1행 데이터 dict
+    config: 선택. 식사사진 등 Drive 다운로드 시 build_credentials에 전달.
     반환: 채워진 Document 객체
     """
     doc = Document(TEMPLATE_PATH)
@@ -346,6 +570,12 @@ def fill_document(data: dict) -> Document:
     # ── 행33: 영양사 총평 ──
     _set_text(rows[33][1], v('영양사총평'), left_align=True)
 
+    # ── 행35: 식사사진등첨부 (오른쪽 셀 — 2열이 있으면 같은 줄 나란히, 크기 상한) ──
+    photo1 = v(_MEAL_PHOTO_COL, '')
+    photo2 = v(_MEAL_PHOTO_COL2, '')
+    if str(photo1).strip() or str(photo2).strip():
+        _insert_meal_photos_cell(rows[35][1], photo1, photo2, config=config)
+
     return doc
 
 
@@ -443,11 +673,11 @@ def _set_cell_preferred_width_dxa(cell, twips: int):
 
 
 def _twips_for_label_cell(text: str) -> int:
-    """라벨 글자 수에 따른 최소 너비(twips). 템플릿 기본(~1400)보다 넉넉히."""
+    """라벨 글자 수에 따른 목표 너비(twips). LibreOffice 첫 열용—과하면 값 칸이 좁아진다."""
     t = (text or '').strip()
     n = max(2, len(t))
-    # 한글·숫자 혼합 라벨: 글자당 약 320 twips + 여백 (12pt 기준 가늠)
-    return min(5200, max(2800, 320 * n + 400))
+    # 이전(2800~·320/글자) 대비 약 절반: 짧은 라벨은 최소만, 긴 라벨만 비례 확대
+    return min(2400, max(1380, 155 * n + 380))
 
 
 def _widen_first_column_labels_for_lo_pdf(doc: Document):
@@ -481,11 +711,88 @@ def _widen_first_column_labels_for_lo_pdf(doc: Document):
         _set_cell_preferred_width_dxa(cell0, w)
 
 
+def _rebalance_tbl_grid_first_col_for_lo_pdf(doc: Document):
+    """
+    LibreOffice는 w:tblGrid의 첫 w:gridCol(템플릿 약 461 twips)을 엄격히 적용해
+    첫 라벨이 글자 단위로 세로 배치된다. Word 로컬에서는 덜 드러날 수 있음.
+
+    첫 gridCol 목표 폭을 라벨 길이에 맞추고, 다른 열에서는 **최소 폭을 지키며**
+    줄일 수 있는 만큼만 빼서 총폭을 유지한다.
+    """
+    from docx.oxml.ns import qn
+
+    if not doc.tables:
+        return
+    tbl = doc.tables[0]._tbl
+    grid = tbl.find(qn('w:tblGrid'))
+    if grid is None:
+        return
+    cols = grid.findall(qn('w:gridCol'))
+    if len(cols) < 2:
+        return
+
+    widths = []
+    for c in cols:
+        w = c.get(qn('w:w'))
+        widths.append(int(w) if w and str(w).isdigit() else 0)
+
+    # 첫 열 라벨(그리드 1칸만 쓰는 행) 중 필요한 최대 폭 (_twips_for_label_cell과 동일 하한)
+    target0 = 1380
+    table = doc.tables[0]
+    for row in table.rows:
+        cells = _unique_cells(row)
+        if len(cells) < 2 or len(cells) not in (2, 3, 4, 8):
+            continue
+        tc0 = cells[0]._tc
+        tcPr = tc0.tcPr
+        if tcPr is None:
+            continue
+        gs = tcPr.find(qn('w:gridSpan'))
+        if gs is not None and gs.get(qn('w:val')) != '1':
+            continue
+        raw = _cell_plain_text(cells[0])
+        if not raw.strip():
+            continue
+        compact = _compact_label_text_for_libreoffice(raw)
+        target0 = max(target0, _twips_for_label_cell(compact))
+
+    old0 = widths[0]
+    # 다른 열에서 각각 최소 이 정도는 남긴다 (생년월일·등급 값 칸이 세로로 가는 것 방지)
+    min_floor = 620
+    max_stealable = sum(max(0, w - min_floor) for w in widths[1:])
+    want = target0 - old0
+    if want <= 0:
+        return
+    delta = min(want, max_stealable)
+    if delta <= 0:
+        return
+    target0 = old0 + delta
+    remaining = delta
+    order = sorted(range(1, len(widths)), key=lambda i: widths[i], reverse=True)
+    while remaining > 0:
+        progressed = False
+        for i in order:
+            if remaining <= 0:
+                break
+            take = min(remaining, max(0, widths[i] - min_floor))
+            if take > 0:
+                widths[i] -= take
+                remaining -= take
+                progressed = True
+        if not progressed:
+            break
+    widths[0] = old0 + (delta - remaining)
+
+    for c, w in zip(cols, widths):
+        c.set(qn('w:w'), str(int(max(100, w))))
+
+
 def save_document(doc: Document, name: str) -> str:
     """output/ 폴더에 저장 후 경로 반환"""
     if platform.system() != 'Windows':
         _normalize_lo_label_cells_for_pdf(doc)
         _widen_first_column_labels_for_lo_pdf(doc)
+        _rebalance_tbl_grid_first_col_for_lo_pdf(doc)
     # 파일 이름에 사용 불가 문자 제거
     safe_name = re.sub(r'[\\/:*?"<>|]', '_', name)
     path = os.path.join(OUTPUT_DIR, f'{safe_name}.docx')
@@ -508,7 +815,7 @@ def print_document(path: str):
     )
 
 
-def generate_all(records: list) -> list:
+def generate_all(records: list, config=None) -> list:
     """
     모든 입소자 docx 생성 후 경로 목록 반환
     records: get_all_records() 결과
@@ -516,7 +823,7 @@ def generate_all(records: list) -> list:
     paths = []
     for rec in records:
         name = rec.get('성명', '미입력')
-        doc = fill_document(rec)
+        doc = fill_document(rec, config=config)
         path = save_document(doc, name)
         paths.append(path)
     return paths

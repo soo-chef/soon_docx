@@ -3,7 +3,11 @@
 """
 import json
 import os
+import re
+import urllib.request
 from datetime import date, timedelta
+from typing import Optional
+from urllib.parse import urlparse, parse_qs
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -47,17 +51,15 @@ def load_config(config_path=None):
         return json.load(f)
 
 
-def get_client(config=None):
-    # Secrets 모드: 클라우드 또는 로컬 secrets.toml
+def build_credentials(config=None):
+    """시트·드라이브 API 공용 서비스 계정 Credentials."""
     if _is_cloud():
         import streamlit as st
-        creds = Credentials.from_service_account_info(
+        return Credentials.from_service_account_info(
             dict(st.secrets['gcp_service_account']),
             scopes=SCOPES,
         )
-        return gspread.authorize(creds)
 
-    # 파일 모드: config.json의 credentials_file → 프로젝트 폴더 기준 JSON
     if config is None:
         config = load_config()
     key = 'credentials_file'
@@ -75,8 +77,62 @@ def get_client(config=None):
             f'인증 JSON을 찾을 수 없습니다: {creds_path}\n'
             f'config.json의 "{key}" 값을 확인하세요.'
         )
-    creds = Credentials.from_service_account_file(creds_path, scopes=SCOPES)
-    return gspread.authorize(creds)
+    return Credentials.from_service_account_file(creds_path, scopes=SCOPES)
+
+
+def get_client(config=None):
+    return gspread.authorize(build_credentials(config))
+
+
+_DRIVE_FILE_ID_RE = re.compile(r'/file/d/([a-zA-Z0-9_-]+)')
+_DRIVE_OPEN_ID_RE = re.compile(r'[?&]id=([a-zA-Z0-9_-]+)')
+
+
+def _drive_file_id_from_url(url: str) -> Optional[str]:
+    m = _DRIVE_FILE_ID_RE.search(url)
+    if m:
+        return m.group(1)
+    m = _DRIVE_OPEN_ID_RE.search(url)
+    if m:
+        return m.group(1)
+    parsed = urlparse(url)
+    if parsed.netloc in ('drive.google.com', 'docs.google.com'):
+        qs = parse_qs(parsed.query)
+        if 'id' in qs and qs['id']:
+            return qs['id'][0]
+    return None
+
+
+def fetch_image_bytes(url: str, creds: Optional[Credentials] = None, *, timeout=60) -> bytes:
+    """
+    공개 http(s) URL 또는 Google Drive 공유 링크에서 이미지 바이트를 가져온다.
+    Drive는 서비스 계정으로 alt=media 다운로드 — 파일을 해당 client_email과 공유해야 한다.
+    """
+    url = (url or '').strip()
+    if not url.startswith(('http://', 'https://')):
+        raise ValueError('http(s) URL이 아닙니다.')
+
+    fid = _drive_file_id_from_url(url)
+    if fid:
+        if creds is None:
+            raise ValueError('Drive에서 받으려면 서비스 계정 인증이 필요합니다.')
+        from google.auth.transport.requests import Request as GoogleAuthRequest
+
+        creds.refresh(GoogleAuthRequest())
+        media_url = f'https://www.googleapis.com/drive/v3/files/{fid}?alt=media'
+        req = urllib.request.Request(
+            media_url,
+            headers={'Authorization': f'Bearer {creds.token}'},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read()
+
+    req = urllib.request.Request(
+        url,
+        headers={'User-Agent': 'Mozilla/5.0 (compatible; soon-docx/1.0)'},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
 
 
 def _get_sheet_id(config=None) -> str:
@@ -96,6 +152,89 @@ def _get_sheet_id(config=None) -> str:
     return config['sheet_id']
 
 
+_MEAL_PHOTO_HEADERS = ('식사사진등첨부', '식사사진등첨부2')
+
+
+def _extract_url_from_sheet_formula(formula: str) -> Optional[str]:
+    """=HYPERLINK(\"url\",...) / =IMAGE(\"url\") 등에서 첫 번째 URL 문자열 추출."""
+    if not formula or not str(formula).strip().startswith('='):
+        return None
+    s = str(formula)
+    for pat in (
+        r'HYPERLINK\s*\(\s*"([^"]+)"',
+        r"HYPERLINK\s*\(\s*'([^']+)'",
+        r'=IMAGE\s*\(\s*"([^"]+)"',
+        r"=IMAGE\s*\(\s*'([^']+)'",
+    ):
+        m = re.search(pat, s, re.I | re.DOTALL)
+        if m:
+            link = (m.group(1) or '').strip()
+            if link.startswith(('http://', 'https://')):
+                return link
+    return None
+
+
+def _enrich_one_photo_column(ws, records: list, header_name: str) -> None:
+    """
+    한 열에 대해 Drive 링크·HYPERLINK 수식 → 레코드에 실제 URL 반영.
+    """
+    if not records:
+        return
+    try:
+        headers = ws.row_values(1)
+    except Exception:
+        return
+
+    col_idx = None
+    actual_key = None
+    target = header_name.strip()
+    for i, h in enumerate(headers):
+        if h is None:
+            continue
+        if str(h).strip() == target:
+            col_idx = i + 1
+            actual_key = h
+            break
+    if col_idx is None:
+        return
+
+    from gspread.utils import ValueRenderOption, rowcol_to_a1
+
+    n = len(records)
+    rng = f"{rowcol_to_a1(2, col_idx)}:{rowcol_to_a1(n + 1, col_idx)}"
+    try:
+        formula_rows = ws.get(rng, value_render_option=ValueRenderOption.formula)
+    except Exception:
+        return
+    try:
+        formatted_rows = ws.get(rng, value_render_option=ValueRenderOption.formatted)
+    except Exception:
+        formatted_rows = None
+
+    for i, rec in enumerate(records):
+        if i >= len(formula_rows) or not formula_rows[i]:
+            continue
+        fcell = formula_rows[i][0]
+        fcell = '' if fcell is None else str(fcell)
+        url = _extract_url_from_sheet_formula(fcell)
+        if not url and formatted_rows and i < len(formatted_rows) and formatted_rows[i]:
+            fc = formatted_rows[i][0]
+            if isinstance(fc, str) and fc.strip().startswith(('http://', 'https://')):
+                url = fc.strip()
+        if not url:
+            cur = rec.get(actual_key, '')
+            if isinstance(cur, str) and cur.strip().startswith(('http://', 'https://')):
+                url = cur.strip()
+        if url:
+            rec[actual_key] = url
+
+
+def enrich_meal_photo_urls(ws, records: list) -> None:
+    """식사사진등첨부, 식사사진등첨부2 열 수식에서 URL 보강."""
+    for hdr in _MEAL_PHOTO_HEADERS:
+        _enrich_one_photo_column(ws, records, hdr)
+
+
 def get_all_records(config=None):
     """구글 시트에서 모든 입소자 데이터 가져오기"""
     if config is None:
@@ -108,6 +247,8 @@ def get_all_records(config=None):
         expected_headers=None,
         value_render_option='UNFORMATTED_VALUE',
     )
+    # Drive 링크·HYPERLINK 수식 → 실제 URL 반영 (성명 필터 전에 전 행 기준)
+    enrich_meal_photo_urls(ws, records)
     # 빈 행 제거 + 날짜 시리얼 변환
     records = [_fix_dates(r) for r in records if r.get('성명', '')]
     return records
