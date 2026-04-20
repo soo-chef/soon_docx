@@ -125,11 +125,48 @@ def _check(cell, options_to_check):
     para.runs[0].text = text
 
 
+def _replace_colon_fill_balanced_paren(text: str, label: str, content: str) -> str:
+    """
+    label 직전에 여는 '('부터 짝이 맞는 ')'까지를 한 블록으로 보고,
+    그 안에서 label 뒤 첫 ':' 다음~그 블록을 닫는 ')' 직전을 content 한 번으로 바꾼다.
+    값에 괄호가 있어도(예: 아스피린) 짝 맞춤으로 닫는 괄호를 찾는다.
+    """
+    content = (content or '').strip()
+    if not content:
+        return text
+    i = text.find(label)
+    if i < 0:
+        return text
+    colon = text.find(':', i)
+    if colon < 0:
+        return text
+    open_idx = text.rfind('(', 0, i)
+    if open_idx < 0:
+        return text
+    depth = 0
+    close_idx = None
+    for j in range(open_idx, len(text)):
+        c = text[j]
+        if c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+            if depth == 0:
+                close_idx = j
+                break
+    if close_idx is None or close_idx <= colon:
+        return text
+    # ': ' 한 칸 뒤에 내용만 (콜론 뒤·닫는 괄호 앞 공백·옛 값·중복 삽입 제거)
+    return text[: colon + 1] + ' ' + content + ' ' + text[close_idx:]
+
+
 def _check_with_content(cell, selected_option, content=''):
     """
     체크박스 + 내용 텍스트 셀
     예: □ 없음   □ 있음 (내용:                )
     """
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
     para = cell.paragraphs[0]
     if not para.runs:
         return
@@ -140,16 +177,22 @@ def _check_with_content(cell, selected_option, content=''):
     if selected_option:
         text = text.replace(f'\u25a1 {selected_option}', f'\u2611 {selected_option}')
         text = text.replace(f'\u25a1{selected_option}', f'\u2611{selected_option}')
-    # 내용 삽입
+    # 내용 삽입 — 라벨별로 콜론 뒤~닫는 괄호 앞을 한 번만 치환 (이전에는 여러 re.sub가 중복 삽입)
     if content:
         content = str(content).strip()
-        # 패턴: "내용 :", "내용:", "해당식품 :", "약물명 및 복용 이유 :" 뒤 공백을 내용으로 교체
-        text = re.sub(r'(내용\s*:\s*)\s{2,}', f'\\g<1>{content}  ', text)
-        text = re.sub(r'(해당식품\s*:\s*)\s{2,}', f'\\g<1>{content}  ', text)
-        text = re.sub(r'(약물명 및 복용 이유\s*:\s*)\s{2,}', f'\\g<1>{content}  ', text)
-        # 괄호 안 공백 채우기: 기타(   ) → 기타(내용)
-        text = re.sub(r'기타\(\s+\)', f'기타({content})', text)
+        applied = False
+        for label in ('약물명 및 복용 이유', '해당식품', '내용'):
+            if label in text:
+                new_t = _replace_colon_fill_balanced_paren(text, label, content)
+                if new_t != text:
+                    text = new_t
+                    applied = True
+                    break
+        if not applied:
+            text = re.sub(r'기타\(\s+\)', f'기타({content})', text)
     para.runs[0].text = text
+    # 템플릿이 '양쪽 맞춤'·글자 균등 분배면 콜론 뒤 공백이 화면에서 과하게 벌어짐 → 왼쪽 맞춤으로 고정
+    para.alignment = WD_ALIGN_PARAGRAPH.LEFT
 
 
 # ─────────────────────────────────────────
@@ -165,6 +208,35 @@ _MEAL_SINGLE_MAX_H_CM = 7.0
 _MEAL_PAIR_GAP_CM = 0.45
 _MEAL_PAIR_MAX_EACH_W_CM = 6.35
 _MEAL_PAIR_MAX_H_CM = 5.8
+# ▶ 수급자·보호자 라벨 열: tcW만으로는 tblGrid보다 넓어질 수 없어, 같은 인덱스의 gridCol도 맞춘다.
+_INDIVIDUAL_NEEDS_LABEL_GRID_COL = 1
+_INDIVIDUAL_NEEDS_LABEL_WIDTH_CM = 1.65
+
+
+def _cm_to_twips(cm: float) -> int:
+    """센티미터 → twips (dxa, Word 1/20 pt)."""
+    return int(round(cm * 1440 / 2.54))
+
+
+def _ensure_table_grid_col_min_twips(doc: Document, grid_index: int, min_twips: int):
+    """w:tblGrid의 한 열 너비를 최소 min_twips 이상으로 (실제 열 폭은 gridCol이 지배)."""
+    from docx.oxml.ns import qn
+
+    if not doc.tables:
+        return
+    tbl = doc.tables[0]._tbl
+    grid_el = tbl.find(qn('w:tblGrid'))
+    if grid_el is None:
+        return
+    cols = grid_el.findall(qn('w:gridCol'))
+    if grid_index < 0 or grid_index >= len(cols):
+        return
+    min_twips = int(max(100, min_twips))
+    c = cols[grid_index]
+    w = c.get(qn('w:w'))
+    cur = int(w) if w and str(w).isdigit() else 0
+    new_w = max(cur, min_twips)
+    c.set(qn('w:w'), str(new_w))
 
 
 def _parse_meal_photo_urls(raw) -> list:
@@ -742,10 +814,13 @@ def _widen_individual_needs_sublabels_for_lo_pdf(doc: Document):
     """
     ▶ 수급자 및 보호자 개별 욕구: 가운데 '수급자'·'보호자' 라벨 열.
     Word에서는 한 줄로 보이나 LibreOffice PDF는 열을 더 좁게 잡아 글자 단위 줄바꿈이 나는 경우가 있다.
+    tcW(셀 선호 너비)만 올리면 tblGrid의 해당 세로줄이 더 좁으면 효과가 없으므로,
+    gridCol과 tcW를 같은 twips(1.65cm)로 맞춘다.
     """
     if not doc.tables:
         return
     table = doc.tables[0]
+    label_cells = []
     for row in table.rows:
         cells = _unique_cells(row)
         if len(cells) != 3:
@@ -754,9 +829,14 @@ def _widen_individual_needs_sublabels_for_lo_pdf(doc: Document):
         compact = re.sub(r'\s+', '', (raw or '').strip())
         if compact not in ('수급자', '보호자'):
             continue
-        _lo_clear_tc_no_wrap_flags(cells[1])
-        # ~2.1cm — 세 글자 라벨이 가로로 들어가도록
-        _set_cell_preferred_width_dxa(cells[1], 1500)
+        label_cells.append(cells[1])
+    if not label_cells:
+        return
+    tw = _cm_to_twips(_INDIVIDUAL_NEEDS_LABEL_WIDTH_CM)
+    _ensure_table_grid_col_min_twips(doc, _INDIVIDUAL_NEEDS_LABEL_GRID_COL, tw)
+    for cell in label_cells:
+        _lo_clear_tc_no_wrap_flags(cell)
+        _set_cell_preferred_width_dxa(cell, tw)
 
 
 def _twips_for_label_cell(text: str) -> int:
