@@ -148,7 +148,7 @@ if load_btn or 'records' in st.session_state:
                 if override_dietitian:
                     rec = dict(rec)
                     rec['영양사이름'] = override_dietitian
-                doc = filler.fill_document(rec)
+                doc = filler.fill_document(rec, config)
                 path = filler.save_document(doc, name)
                 paths.append(path)
             except Exception as e:
@@ -240,7 +240,9 @@ else:
         '종교', '금식일기도시간', '종교적식사제한', '종교제한내용',
         '문화적식습관내용', '출신지역특성내용',
         '선호음식', '비선호음식', '식품알러지내용',
-        '수급자욕구', '보호자욕구', '영양사총평', '작성일', '영양사이름',
+        '수급자욕구', '보호자욕구', '영양사총평',
+        '식사사진등첨부', '식사사진등첨부2',
+        '작성일', '영양사이름',
     ]
 
     # 탭으로 구분하여 복사하기 쉽게 출력
