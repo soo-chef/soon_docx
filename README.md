@@ -22,7 +22,7 @@ Python (docx 템플릿에 데이터 자동 입력)
 ### 1단계. 구글 클라우드 API 설정
 
 1. [https://console.cloud.google.com](https://console.cloud.google.com) 접속
-   - jkj0601@gmail.com 계정으로 로그인
+   - 구글 계정으로 로그인
 
 2. 상단 프로젝트 선택 → **새 프로젝트** 생성
    - 프로젝트 이름 예: `영양사정기록지`
