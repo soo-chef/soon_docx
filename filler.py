@@ -27,7 +27,7 @@
   행31 (3셀): 개별욕구제목 | 보호자 | [값]
   행33 (2셀): 영양사총평 | [값]
   행34 (1셀): 구역 제목(첨부)
-  행35 (2셀): 식사사진등첨부(라벨) | [이미지 — `식사사진등첨부`·`식사사진등첨부2` URL, 2열이면 같은 줄에 나란히·크기 자동]
+  행35 (2셀): 식사사진첨부(라벨) | [이미지 — `식사사진첨부`·`식사사진첨부2` URL, 2열이면 같은 줄에 나란히·크기 자동]
 """
 import datetime
 import io
@@ -200,8 +200,8 @@ def _check_with_content(cell, selected_option, content=''):
 # ─────────────────────────────────────────
 
 _MAX_MEAL_PHOTO_BYTES = 15 * 1024 * 1024
-_MEAL_PHOTO_COL = '식사사진등첨부'
-_MEAL_PHOTO_COL2 = '식사사진등첨부2'
+_MEAL_PHOTO_COL = '식사사진첨부'
+_MEAL_PHOTO_COL2 = '식사사진첨부2'
 # 한 장·두 장 모두 세로로 과도하게 늘어나지 않도록 상한 (cm). 2열 나란히 시 각 칸·행 높이 기준.
 _MEAL_SINGLE_MAX_W_CM = 11.5
 _MEAL_SINGLE_MAX_H_CM = 7.0
@@ -345,7 +345,7 @@ def _meal_image_dims_cm(data: bytes, max_w_cm: float, max_h_cm: float):
 
 def _insert_meal_photos_cell(cell, raw_primary, raw_secondary=None, config=None):
     """
-    식사사진등첨부 칸에 이미지 삽입.
+    식사사진첨부 칸에 이미지 삽입.
     1열만 있으면 세로로 쌓음. 2열 URL이 모두 있으면 같은 행에 나란히(가운데 간격),
     인덱스별로 짝을 맞춤. 크기는 상한 안에서 자동 축소(2페이지 내 쓰기 목적).
     """
@@ -695,7 +695,7 @@ def fill_document(data: dict, config=None) -> Document:
     # ── 행33: 영양사 총평 ──
     _set_text(rows[33][1], v('영양사총평'), left_align=True)
 
-    # ── 행35: 식사사진등첨부 (오른쪽 셀 — 2열이 있으면 같은 줄 나란히, 크기 상한) ──
+    # ── 행35: 식사사진첨부 (오른쪽 셀 — 2열이 있으면 같은 줄 나란히, 크기 상한) ──
     photo1 = v(_MEAL_PHOTO_COL, '')
     photo2 = v(_MEAL_PHOTO_COL2, '')
     if str(photo1).strip() or str(photo2).strip():
