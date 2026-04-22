@@ -152,7 +152,7 @@ def _get_sheet_id(config=None) -> str:
     return config['sheet_id']
 
 
-_MEAL_PHOTO_HEADERS = ('식사사진등첨부', '식사사진등첨부2')
+_MEAL_PHOTO_HEADERS = ('식사사진첨부', '식사사진첨부2')
 
 
 def _extract_url_from_sheet_formula(formula: str) -> Optional[str]:
@@ -230,7 +230,7 @@ def _enrich_one_photo_column(ws, records: list, header_name: str) -> None:
 
 
 def enrich_meal_photo_urls(ws, records: list) -> None:
-    """식사사진등첨부, 식사사진등첨부2 열 수식에서 URL 보강."""
+    """식사사진첨부, 식사사진첨부2 열 수식에서 URL 보강."""
     for hdr in _MEAL_PHOTO_HEADERS:
         _enrich_one_photo_column(ws, records, hdr)
 
