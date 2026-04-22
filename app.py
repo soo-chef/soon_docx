@@ -53,6 +53,7 @@ with st.sidebar:
     sheet_name = st.text_input(
         '시트 탭 이름',
         value=config.get('sheet_name', '입소자목록'),
+        help='스프레드시트 **하단**의 워크시트 탭 이름입니다. 브라우저 상단의 파일 제목과는 다릅니다.',
     )
 
     if st.button('💾 설정 저장'):
@@ -69,8 +70,13 @@ with st.sidebar:
     if st.button('🔗 연결 테스트'):
         try:
             import sheets
-            title = sheets.test_connection(config)
-            st.success(f'연결 성공!\n시트: {title}')
+            cfg = {**config, 'sheet_id': sheet_id, 'sheet_name': sheet_name}
+            doc_title, tab_title = sheets.test_connection(cfg)
+            st.success(
+                f'연결 성공!\n'
+                f'· 파일 제목(상단): {doc_title}\n'
+                f'· 읽은 탭(하단): {tab_title}'
+            )
         except Exception as e:
             st.error(f'연결 실패: {e}')
 
@@ -93,8 +99,9 @@ if load_btn or 'records' in st.session_state:
     if load_btn:
         try:
             import sheets
+            cfg = {**config, 'sheet_id': sheet_id, 'sheet_name': sheet_name}
             with st.spinner('구글 시트에서 데이터 가져오는 중...'):
-                records = sheets.get_all_records(config)
+                records = sheets.get_all_records(cfg)
             st.session_state['records'] = records
             st.success(f'총 {len(records)}명 데이터 불러옴')
         except Exception as e:
@@ -236,11 +243,11 @@ else:
         '문제_식욕저하', '문제_저작곤란', '문제_연하곤란', '문제_소화불량', '문제_구토', '문제_없음',
         '치아상태', '소화기능', '배설양상', '특이체질_없음', '특이체질_있음', '특이체질내용', 
         '선호음식', '비선호음식', '식품알러지_없음', '식품알러지_있음', '식품알러지내용',
-        '주요진단명', '질환_당뇨', '질환_고혈압', '질환_심장질환', '질환_뇌혈관질환',
-        '질환_신장질환', '질환_간질환', '질환_암', '질환_기타', '질환_기타내용',
+        '주요진단명', '질환_당뇨', '질환_고혈압', '질환_뇌혈관질환',
+        '질환_신경질환', '질환_치매', '질환_암', '질환_기타', '질환_기타내용',
         '현재복용약물_없음', '현재복용약물_있음', '복용약물내용',
         '약물영향_없음', '약물영향_식욕저하', '약물영향_구역구토',
-        '약물영향_미각변화', '약물영향_흡수장애', '약물영향_기타', '약물영향_기타내용',
+        '약물영향_흡수장애', '약물영향_기타', '약물영향_기타내용',
         '종교', '종교_기타내용', '금식일기도시간', '종교적식사제한', '종교제한내용',
         '문화적식습관', '문화적식습관내용', '출신지역국가특성', '출신지역특성내용',
         '수급자욕구', '보호자욕구', '영양사총평',

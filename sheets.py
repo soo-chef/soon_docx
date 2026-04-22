@@ -255,10 +255,17 @@ def get_all_records(config=None):
 
 
 def test_connection(config=None):
-    """연결 테스트 - 성공 시 시트 제목 반환"""
+    """
+    연결 테스트 — 성공 시 (스프레드시트 파일 제목, 워크시트 탭 제목) 튜플 반환.
+
+    구글 시트에서 '파일 제목'(브라우저 상단)과 '하단 탭 이름'은 서로 다른 값이다.
+    데이터는 탭 단위로 읽으며, 파일 제목만으로는 탭을 구분하지 않는다.
+    """
     if config is None:
         config = load_config()
     gc = get_client(config)
     sheet_id = _get_sheet_id(config)
     sh = gc.open_by_key(sheet_id)
-    return sh.title
+    tab = (config.get('sheet_name') or '').strip() or '입소자목록'
+    ws = sh.worksheet(tab)
+    return sh.title, ws.title
