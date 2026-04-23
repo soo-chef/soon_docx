@@ -3,6 +3,10 @@
 Streamlit 앱
 
 실행: streamlit run app.py
+
+배포 URL(브라우저 링크)에서는 이 파일이 config.json을 읽지 않고,
+Streamlit Cloud의 Secrets(dietitian, sheet_id, sheet_name, gcp_service_account)만 사용한다.
+로컬에서 config.json을 바꿔도 링크로 연 앱에는 적용되지 않는다.
 """
 import json
 import os
@@ -19,10 +23,17 @@ st.set_page_config(
     layout='wide',
 )
 
-# secrets에서만 설정 읽기
+# secrets에서만 설정 읽기 (배포/로컬 secrets 공통 — config.json 미사용)
 dietitian = st.secrets.get('dietitian', '')
 sheet_id = st.secrets.get('sheet_id', '')
 sheet_name = st.secrets.get('sheet_name', '입소자목록')
+
+if not str(sheet_id).strip():
+    st.warning(
+        '**Secrets에 `sheet_id`가 없습니다.** 데이터 불러오기가 실패합니다. '
+        'Streamlit Cloud → 앱 → Settings → Secrets에서 `sheet_id`(및 `gcp_service_account`)를 설정하세요. '
+        '이 앱 모드에서는 **config.json을 사용하지 않습니다** — PC에서 config만 고쳐도 링크 앱에는 반영되지 않습니다.'
+    )
 
 # config 대체용 dict
 config = {
