@@ -12,7 +12,6 @@ import time
 import streamlit as st
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
 
 st.set_page_config(
     page_title='영양사정기록지 자동 출력',
@@ -20,57 +19,57 @@ st.set_page_config(
     layout='wide',
 )
 
+# secrets에서만 설정 읽기
+dietitian = st.secrets.get('dietitian', '')
+sheet_id = st.secrets.get('sheet_id', '')
+sheet_name = st.secrets.get('sheet_name', '입소자목록')
+
+# config 대체용 dict
+config = {
+    'dietitian': dietitian,
+    'sheet_id': sheet_id,
+    'sheet_name': sheet_name,
+}
+
 # ─────────────────────────────────────────
-# 사이드바: 설정
+# 사이드바: 설정(읽기 전용)
 # ─────────────────────────────────────────
 with st.sidebar:
     st.title('⚙️ 설정')
 
-    # config.json 로드
-    config_ok = False
-    if os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH, encoding='utf-8') as f:
-            config = json.load(f)
-        config_ok = True
-    else:
-        st.error('config.json 파일이 없습니다.')
-        config = {}
-
-    # 영양사 이름
-    dietitian = st.text_input(
+    st.text_input(
         '영양사 이름',
-        value=config.get('dietitian', ''),
-        placeholder='예: 제갈순',
-        help='모든 기록지에 동일하게 적용됩니다',
+        value=dietitian,
+        disabled=True,
+        help='Streamlit secrets에서 읽어옵니다',
     )
 
-    # 시트 ID 입력
-    sheet_id = st.text_input(
+    st.text_input(
         '구글 시트 ID',
-        value=config.get('sheet_id', ''),
-        help='구글 시트 URL의 /d/ 뒤 긴 문자열',
+        value=sheet_id,
+        disabled=True,
+        help='Streamlit secrets에서 읽어옵니다',
     )
-    sheet_name = st.text_input(
+
+    st.text_input(
         '시트 탭 이름',
-        value=config.get('sheet_name', '입소자목록'),
-        help='스프레드시트 **하단**의 워크시트 탭 이름입니다. 브라우저 상단의 파일 제목과는 다릅니다.',
+        value=sheet_name,
+        disabled=True,
+        help='Streamlit secrets에서 읽어옵니다',
     )
 
-    if st.button('💾 설정 저장'):
-        config['sheet_id'] = sheet_id
-        config['sheet_name'] = sheet_name
-        config['dietitian'] = dietitian
-        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
-        st.success('저장 완료')
-
+    st.caption('설정값은 .streamlit/secrets.toml 에서 관리합니다.')
     st.divider()
 
     # 연결 테스트
     if st.button('🔗 연결 테스트'):
         try:
             import sheets
-            cfg = {**config, 'sheet_id': sheet_id, 'sheet_name': sheet_name}
+            cfg = {
+                'dietitian': dietitian,
+                'sheet_id': sheet_id,
+                'sheet_name': sheet_name,
+            }
             doc_title, tab_title = sheets.test_connection(cfg)
             st.success(
                 f'연결 성공!\n'
@@ -99,7 +98,11 @@ if load_btn or 'records' in st.session_state:
     if load_btn:
         try:
             import sheets
-            cfg = {**config, 'sheet_id': sheet_id, 'sheet_name': sheet_name}
+            cfg = {
+                'dietitian': dietitian,
+                'sheet_id': sheet_id,
+                'sheet_name': sheet_name,
+            }
             with st.spinner('구글 시트에서 데이터 가져오는 중...'):
                 records = sheets.get_all_records(cfg)
             st.session_state['records'] = records
@@ -140,7 +143,7 @@ if load_btn or 'records' in st.session_state:
     if generate_btn:
         import filler
 
-        override_dietitian = config.get('dietitian', '').strip()
+        override_dietitian = dietitian.strip()
 
         # ── 1단계: 개인별 docx 생성 ──
         progress = st.progress(0, text='문서 생성 중...')
