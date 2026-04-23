@@ -11,6 +11,8 @@ import time
 
 import streamlit as st
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # 1) 혹시 남아 있는 config.json 삭제
 CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
 if os.path.exists(CONFIG_PATH):
@@ -27,7 +29,7 @@ st.sidebar.write("DEBUG sheet_name:", sheet_name)
 
 
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 
 st.set_page_config(
     page_title='영양사정기록지 자동 출력',
