@@ -138,8 +138,9 @@ def fetch_image_bytes(url: str, creds: Optional[Credentials] = None, *, timeout=
 def _get_sheet_id(config=None) -> str:
     """
     sheet_id:
-    - Secrets 모드: 호출 측 config에 sheet_id가 있으면 그것을 쓰고, 없으면 st.secrets.
-    - 로컬 파일 모드: config.json(또는 전달된 config)의 sheet_id.
+    - Secrets 인증 모드: 전달된 config(예: app에서 병합한 값)의 sheet_id 우선,
+      없으면 st.secrets['sheet_id'], 둘 다 없으면 오류.
+    - 로컬 키 파일 모드: config의 sheet_id(config.json 또는 호출부에서 전달).
     """
     if _is_cloud():
         import streamlit as st
@@ -150,9 +151,8 @@ def _get_sheet_id(config=None) -> str:
             sid = str(st.secrets['sheet_id']).strip()
         if not sid:
             raise ValueError(
-                'Secrets 모드인데 sheet_id가 비어 있습니다. '
-                'Streamlit Cloud 앱 설정 → Secrets에 sheet_id를 넣으세요. '
-                '(이 모드에서는 PC의 config.json이 서버에 반영되지 않습니다.)'
+                'sheet_id가 비어 있습니다. config.json(저장소에 포함 시) 또는 '
+                'Streamlit Secrets의 sheet_id를 설정하세요.'
             )
         return sid
     if config is None:

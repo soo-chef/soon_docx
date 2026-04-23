@@ -4,18 +4,22 @@ Streamlit 앱
 
 실행: streamlit run app.py
 
-배포 URL(브라우저 링크)에서는 이 파일이 config.json을 읽지 않고,
-Streamlit Cloud의 Secrets(dietitian, sheet_id, sheet_name, gcp_service_account)만 사용한다.
-로컬에서 config.json을 바꿔도 링크로 연 앱에는 적용되지 않는다.
+설정은 기본적으로 저장소의 config.json에서 읽고, 사이드바에서 수정 후
+「설정 저장」으로 파일에 씁니다. 데이터 불러오기·연결 테스트는 저장 여부와
+관계없이 현재 입력창 값을 반영합니다.
+
+인증: .streamlit/secrets.toml(또는 Streamlit Cloud Secrets)에 [gcp_service_account]가
+있으면 sheets.py가 키 파일 대신 Secrets를 사용합니다. 없으면 config.json의
+credentials_file 경로를 사용합니다(로컬).
 """
 import json
 import os
 import platform
-import time
 
 import streamlit as st
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
 
 st.set_page_config(
     page_title='영양사정기록지 자동 출력',
@@ -23,64 +27,59 @@ st.set_page_config(
     layout='wide',
 )
 
-# secrets에서만 설정 읽기 (배포/로컬 secrets 공통 — config.json 미사용)
-dietitian = st.secrets.get('dietitian', '')
-sheet_id = st.secrets.get('sheet_id', '')
-sheet_name = st.secrets.get('sheet_name', '입소자목록')
-
-if not str(sheet_id).strip():
-    st.warning(
-        '**Secrets에 `sheet_id`가 없습니다.** 데이터 불러오기가 실패합니다. '
-        'Streamlit Cloud → 앱 → Settings → Secrets에서 `sheet_id`(및 `gcp_service_account`)를 설정하세요. '
-        '이 앱 모드에서는 **config.json을 사용하지 않습니다** — PC에서 config만 고쳐도 링크 앱에는 반영되지 않습니다.'
-    )
-
-# config 대체용 dict
-config = {
-    'dietitian': dietitian,
-    'sheet_id': sheet_id,
-    'sheet_name': sheet_name,
-}
-
 # ─────────────────────────────────────────
-# 사이드바: 설정(읽기 전용)
+# 사이드바: 설정
 # ─────────────────────────────────────────
 with st.sidebar:
     st.title('⚙️ 설정')
 
-    st.text_input(
+    # config.json 로드
+    if os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH, encoding='utf-8') as f:
+            config = json.load(f)
+    else:
+        st.error('config.json 파일이 없습니다.')
+        config = {}
+
+    # 영양사 이름
+    dietitian = st.text_input(
         '영양사 이름',
-        value=dietitian,
-        disabled=True,
-        help='Streamlit secrets에서 읽어옵니다',
+        value=config.get('dietitian', ''),
+        placeholder='예: 제갈순',
+        help='모든 기록지에 동일하게 적용됩니다',
     )
 
-    st.text_input(
+    # 시트 ID 입력
+    sheet_id = st.text_input(
         '구글 시트 ID',
-        value=sheet_id,
-        disabled=True,
-        help='Streamlit secrets에서 읽어옵니다',
+        value=config.get('sheet_id', ''),
+        help='구글 시트 URL의 /d/ 뒤 긴 문자열',
     )
-
-    st.text_input(
+    sheet_name = st.text_input(
         '시트 탭 이름',
-        value=sheet_name,
-        disabled=True,
-        help='Streamlit secrets에서 읽어옵니다',
+        value=config.get('sheet_name', '입소자목록'),
+        help='스프레드시트 **하단**의 워크시트 탭 이름입니다. 브라우저 상단의 파일 제목과는 다릅니다.',
     )
 
-    st.caption('설정값은 .streamlit/secrets.toml 에서 관리합니다.')
+    if st.button('💾 설정 저장'):
+        config['sheet_id'] = sheet_id
+        config['sheet_name'] = sheet_name
+        config['dietitian'] = dietitian
+        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        st.success('저장 완료')
+
+    st.caption(
+        '인증: `config.json`의 `credentials_file` 또는 Secrets의 `[gcp_service_account]`'
+    )
+
     st.divider()
 
     # 연결 테스트
     if st.button('🔗 연결 테스트'):
         try:
             import sheets
-            cfg = {
-                'dietitian': dietitian,
-                'sheet_id': sheet_id,
-                'sheet_name': sheet_name,
-            }
+            cfg = {**config, 'sheet_id': sheet_id, 'sheet_name': sheet_name}
             doc_title, tab_title = sheets.test_connection(cfg)
             st.success(
                 f'연결 성공!\n'
@@ -109,26 +108,14 @@ if load_btn or 'records' in st.session_state:
     if load_btn:
         try:
             import sheets
-            cfg = {
-                'dietitian': dietitian,
-                'sheet_id': sheet_id,
-                'sheet_name': sheet_name,
-            }
+            cfg = {**config, 'sheet_id': sheet_id, 'sheet_name': sheet_name}
             with st.spinner('구글 시트에서 데이터 가져오는 중...'):
                 records = sheets.get_all_records(cfg)
             st.session_state['records'] = records
             st.success(f'총 {len(records)}명 데이터 불러옴')
-        # except Exception as e:
-        #     st.error(f'데이터 불러오기 실패: {e}')
-        #     st.stop()
-
         except Exception as e:
-            import traceback
-            st.error(f'데이터 불러오기 실패: {type(e).__name__}: {repr(e)}')
-            st.code(traceback.format_exc())
+            st.error(f'데이터 불러오기 실패: {e}')
             st.stop()
-
-
 
     records = st.session_state.get('records', [])
 
@@ -163,6 +150,7 @@ if load_btn or 'records' in st.session_state:
         import filler
 
         override_dietitian = dietitian.strip()
+        cfg_fill = {**config, 'dietitian': dietitian, 'sheet_id': sheet_id, 'sheet_name': sheet_name}
 
         # ── 1단계: 개인별 docx 생성 ──
         progress = st.progress(0, text='문서 생성 중...')
@@ -177,7 +165,7 @@ if load_btn or 'records' in st.session_state:
                 if override_dietitian:
                     rec = dict(rec)
                     rec['영양사이름'] = override_dietitian
-                doc = filler.fill_document(rec, config)
+                doc = filler.fill_document(rec, cfg_fill)
                 path = filler.save_document(doc, name)
                 paths.append(path)
             except Exception as e:
@@ -258,12 +246,12 @@ else:
 
     headers = [
         '성명', '입소일', '생년월일', '성별', '작성일', '영양사이름', '신장', '평소체중', '등급', '식사유형',
-        '1일필요열량', '1일필요단백질', '식사방법_자립식사', '식사방법_부분도움', '식사방법_완전도움', 
-        '식사섭취상태_양호', '식사섭취상태_보통', '식사섭취상태_불량', 
+        '1일필요열량', '1일필요단백질', '식사방법_자립식사', '식사방법_부분도움', '식사방법_완전도움',
+        '식사섭취상태_양호', '식사섭취상태_보통', '식사섭취상태_불량',
         '식사속도_양호', '식사속도_보통', '식사속도_불량',
         '도구_젓가락', '도구_숟가락', '도구_포크숟가락', '도구_불가',
         '문제_식욕저하', '문제_저작곤란', '문제_연하곤란', '문제_소화불량', '문제_구토', '문제_없음',
-        '치아상태', '소화기능', '배설양상', '특이체질_없음', '특이체질_있음', '특이체질내용', 
+        '치아상태', '소화기능', '배설양상', '특이체질_없음', '특이체질_있음', '특이체질내용',
         '선호음식', '비선호음식', '식품알러지_없음', '식품알러지_있음', '식품알러지내용',
         '주요진단명', '질환_당뇨', '질환_고혈압', '질환_뇌혈관질환',
         '질환_신경질환', '질환_치매', '질환_암', '질환_기타', '질환_기타내용',
@@ -275,7 +263,6 @@ else:
         '수급자욕구', '보호자욕구', '영양사총평',
         '식사사진첨부', '식사사진첨부2',
     ]
-
 
     # 탭으로 구분하여 복사하기 쉽게 출력
     st.code('\t'.join(headers), language=None)

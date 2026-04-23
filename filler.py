@@ -451,7 +451,8 @@ def _insert_meal_photos_cell(cell, raw_primary, raw_secondary=None, config=None)
 def fill_document(data: dict, config=None) -> Document:
     """
     data: 구글 시트 1행 데이터 dict
-    config: 선택. 식사사진 등 Drive 다운로드 시 build_credentials에 전달.
+    config: 선택. 식사사진 등 Drive 다운로드 시 sheets.build_credentials(config)에 전달.
+    로컬은 config.json의 credentials_file, Streamlit Secrets에 gcp_service_account가 있으면 키 파일 없이 동작.
     반환: 채워진 Document 객체
     """
     doc = Document(TEMPLATE_PATH)
@@ -601,10 +602,9 @@ def fill_document(data: dict, config=None) -> Document:
     질환 = []
     if is_true('질환_당뇨'):       질환.append('당뇨')
     if is_true('질환_고혈압'):     질환.append('고혈압')
-    if is_true('질환_심장질환'):   질환.append('심장질환')
     if is_true('질환_뇌혈관질환'): 질환.append('뇌혈관질환')
-    if is_true('질환_신장질환'):   질환.append('신장질환')
-    if is_true('질환_간질환'):     질환.append('간질환')
+    if is_true('질환_신경질환'):   질환.append('신경질환')
+    if is_true('질환_치매'):     질환.append('치매')
     if is_true('질환_암'):         질환.append('암')
     기타질환 = v('질환_기타내용')
     if is_true('질환_기타') or 기타질환:
@@ -641,8 +641,6 @@ def fill_document(data: dict, config=None) -> Document:
             약물영향.append('식욕저하')
         if is_true('약물영향_구역구토'):
             약물영향.append('구역/구토')
-        if is_true('약물영향_미각변화'):
-            약물영향.append('미각변화')
         if is_true('약물영향_흡수장애'):
             약물영향.append('흡수장애')
         if is_true('약물영향_기타') or 기타약물영향:
