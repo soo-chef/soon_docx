@@ -225,31 +225,6 @@ def _meal_photo_raw_from_record(data: dict, names: tuple, v_get) -> str:
     return ''
 
 
-def meal_photo_secondary_nonempty(data: dict) -> bool:
-    """식사사진첨부2(또는 식사사진등첨부2) 열에 채워진 값이 있는지 — UI 디버그용."""
-
-    def v_get(key, default=''):
-        val = data.get(key, default)
-        if val is None:
-            return default
-        return val
-
-    raw = str(_meal_photo_raw_from_record(data, _MEAL_PHOTO2_NAMES, v_get)).strip()
-    if raw:
-        return True
-    # enrich 전·수식 문자열만 남은 행: 시트에는 IMAGE가 보여도 dict 값이 '='로 시작할 수 있음
-    from sheets import meal_header_compact
-
-    want = {meal_header_compact(n) for n in _MEAL_PHOTO2_NAMES}
-    for k, val in data.items():
-        if meal_header_compact(k) not in want:
-            continue
-        vs = '' if val is None else str(val).strip()
-        if vs.startswith(('=', 'http://', 'https://')):
-            return True
-    return False
-
-
 def _record_value_strip_header_key(data: dict, logical_name: str, default=''):
     """
     시트 1행 헤더에 보이지 않는 공백·NBSP 등이 있으면 get_all_records 키가
@@ -475,19 +450,6 @@ def _insert_meal_photos_cell(cell, raw_primary, raw_secondary=None, config=None)
         data = _apply_exif_orientation(data)
         imgs_s.append(data)
 
-    if os.environ.get('SOON_DOCX_DEBUG_MEAL_PHOTOS', '').strip().lower() in (
-        '1',
-        'true',
-        'yes',
-    ):
-        import sys
-
-        sys.stderr.write(
-            '[soon-docx meal-photo fetch] '
-            f'primary_urls={urls_p!r} secondary_urls={urls_s!r} '
-            f'downloaded_primary={len(imgs_p)} downloaded_secondary={len(imgs_s)}\n'
-        )
-
     if not imgs_p and not imgs_s:
         return
 
@@ -544,6 +506,8 @@ def fill_document(data: dict, config=None) -> Document:
     data: 구글 시트 1행 데이터 dict
     config: 선택. 식사사진 등 Drive 다운로드 시 sheets.build_credentials(config)에 전달.
     로컬은 config.json의 credentials_file, Streamlit Secrets에 gcp_service_account가 있으면 키 파일 없이 동작.
+    식사사진: `get_all_records`에서 image_id·image2_id → uc?export=view URL 보강을 하며,
+    여기서도 한 번 더 호출해 다른 경로로 넘어온 dict에도 DOCX에 이미지가 들어가게 한다.
     반환: 채워진 Document 객체
     """
     doc = Document(TEMPLATE_PATH)
@@ -785,23 +749,11 @@ def fill_document(data: dict, config=None) -> Document:
     _set_text(rows[33][1], v('영양사총평'), left_align=True)
 
     # ── 행35: 식사사진첨부 (오른쪽 셀 — 2열이 있으면 같은 줄 나란히, 크기 상한) ──
+    from sheets import enrich_meal_photo_from_image_id_columns
+
+    enrich_meal_photo_from_image_id_columns([data])
     photo1 = _meal_photo_raw_from_record(data, _MEAL_PHOTO_NAMES, v)
     photo2 = _meal_photo_raw_from_record(data, _MEAL_PHOTO2_NAMES, v)
-    if os.environ.get('SOON_DOCX_DEBUG_MEAL_PHOTOS', '').strip().lower() in (
-        '1',
-        'true',
-        'yes',
-    ):
-        import sys
-
-        _photo_keys = [k for k in data if '사진' in str(k)][:6]
-        sys.stderr.write(
-            '[soon-docx meal-photo] '
-            f'keys_sample={_photo_keys!r} '
-            f'parsed_primary={_parse_meal_photo_urls(photo1)!r} '
-            f'parsed_secondary={_parse_meal_photo_urls(photo2)!r} '
-            f'raw_primary={str(photo1)[:100]!r} raw_secondary={str(photo2)[:100]!r}\n'
-        )
     if str(photo1).strip() or str(photo2).strip():
         _insert_meal_photos_cell(rows[35][1], photo1, photo2, config=config)
 
@@ -1061,13 +1013,18 @@ def _rebalance_tbl_grid_first_col_for_lo_pdf(doc: Document):
 def save_document(doc: Document, name: str) -> str:
     """output/ 폴더에 저장 후 경로 반환"""
     if platform.system() != 'Windows':
-        # LibreOffice(headless) PDF는 Word보다 w:tblGrid·첫 열 폭을 빡세게 적용해
-        # 라벨이 글자 단위로 세로 깨지거나 페이지가 어긋난다. Linux/클라우드 저장 시 항상 보정한다.
-        # (Windows는 Word/docx2pdf 경로라 동일 보정을 하지 않음 — 로컬 미리보기는 템플릿에 가깝게 유지)
+        # LibreOffice용 라벨 공백 정리(템플릿 tblGrid는 건드리지 않음)
         _normalize_lo_label_cells_for_pdf(doc)
-        _widen_individual_needs_sublabels_for_lo_pdf(doc)
-        _widen_first_column_labels_for_lo_pdf(doc)
-        _rebalance_tbl_grid_first_col_for_lo_pdf(doc)
+        # 아래 세 함수는 w:tblGrid·열 너비를 다시 나누어 템플릿에서 맞춘 성명 행 폭이 무너질 수 있음.
+        # PDF에서 특정 라벨만 세로로 깨질 때만 켠다: SOON_DOCX_LO_GRID_FIX=1
+        if os.environ.get('SOON_DOCX_LO_GRID_FIX', '').strip().lower() in (
+            '1',
+            'true',
+            'yes',
+        ):
+            _widen_individual_needs_sublabels_for_lo_pdf(doc)
+            _widen_first_column_labels_for_lo_pdf(doc)
+            _rebalance_tbl_grid_first_col_for_lo_pdf(doc)
     # 파일 이름에 사용 불가 문자 제거
     safe_name = re.sub(r'[\\/:*?"<>|]', '_', name)
     path = os.path.join(OUTPUT_DIR, f'{safe_name}.docx')

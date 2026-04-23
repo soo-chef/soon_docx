@@ -394,17 +394,88 @@ def _enrich_one_photo_column(ws, records: list, header_name: str) -> None:
                     url = cur.strip()
                     break
         if url:
-            # gspread 키가 1행과 문자 단위로 같아야 하므로, 같은 열로 보이는 모든 dict 키에 반영.
+            # 같은 열로 보이는 기존 dict 키에도 반영 + 1행 헤더 문자열 키에는 항상 기록한다.
+            # get_all_records가 BV 열 키를 빼먹거나(병합/빈 헤더) 키 표기가 달라도 URL이 버려지지 않게.
             hk = meal_header_compact(header_canon)
             for rk in list(rec.keys()):
                 if meal_header_compact(rk) == hk:
                     rec[rk] = url
+            rec[header_canon] = url
+            if header_raw and header_raw != header_canon:
+                rec[header_raw] = url
 
 
 def enrich_meal_photo_urls(ws, records: list) -> None:
     """식사사진첨부, 식사사진첨부2 열 수식에서 URL 보강."""
     for hdr in _MEAL_PHOTO_HEADERS:
         _enrich_one_photo_column(ws, records, hdr)
+
+
+def _drive_uc_view_url_from_file_id(fid) -> Optional[str]:
+    """BW/BX 등 image_id 셀 값 → 브라우저와 같은 uc?export=view URL."""
+    if fid is None:
+        return None
+    s = str(fid).strip()
+    if not s or s in ('#N/A', '#REF!', '#ERROR!'):
+        return None
+    if s.startswith(('http://', 'https://')):
+        return s
+    s = re.sub(r'\.0$', '', s)
+    if len(s) < 12:
+        return None
+    return f'https://drive.google.com/uc?export=view&id={s}'
+
+
+def _pick_first_nonempty(rec: dict, keys: tuple) -> Optional[str]:
+    for k in keys:
+        v = rec.get(k)
+        if v is None:
+            continue
+        t = str(v).strip()
+        if t:
+            return t
+    return None
+
+
+def _slot_has_http_photo_url(rec: dict, header_names: tuple) -> bool:
+    hset = {meal_header_compact(h) for h in header_names}
+    for k, v in rec.items():
+        if meal_header_compact(k) not in hset:
+            continue
+        s = '' if v is None else str(v).strip()
+        if s.startswith(('http://', 'https://')):
+            return True
+    return False
+
+
+def _apply_photo_url_to_header_group(rec: dict, header_names: tuple, url: str) -> None:
+    if not url:
+        return
+    hset = {meal_header_compact(h) for h in header_names}
+    for rk in list(rec.keys()):
+        if meal_header_compact(rk) in hset:
+            rec[rk] = url
+    for h in header_names:
+        rec[h] = url
+
+
+def enrich_meal_photo_from_image_id_columns(records: list) -> None:
+    """
+    1행에 image_id / image2_id 같은 열이 있고 BW·BX에 파일 ID만 있을 때,
+    IMAGE 수식 보강이 비어 있으면 uc?export=view&id=… URL을 채운다.
+    (식사사진첨부 열과 동일한 형식으로 docx/filler가 읽을 수 있게)
+    """
+    id1_keys = ('image_id', 'IMAGE_ID', 'Image_ID', 'Image_id')
+    id2_keys = ('image2_id', 'IMAGE2_ID', 'Image2_ID', 'Image2_id')
+    primary = ('식사사진첨부', '식사사진등첨부')
+    secondary = ('식사사진첨부2', '식사사진등첨부2')
+    for rec in records:
+        u1 = _drive_uc_view_url_from_file_id(_pick_first_nonempty(rec, id1_keys))
+        u2 = _drive_uc_view_url_from_file_id(_pick_first_nonempty(rec, id2_keys))
+        if u1 and not _slot_has_http_photo_url(rec, primary):
+            _apply_photo_url_to_header_group(rec, primary, u1)
+        if u2 and not _slot_has_http_photo_url(rec, secondary):
+            _apply_photo_url_to_header_group(rec, secondary, u2)
 
 
 def get_all_records(config=None):
@@ -421,8 +492,12 @@ def get_all_records(config=None):
     )
     # Drive 링크·HYPERLINK 수식 → 실제 URL 반영 (성명 필터 전에 전 행 기준)
     enrich_meal_photo_urls(ws, records)
+    enrich_meal_photo_from_image_id_columns(records)
     # 빈 행 제거 + 날짜 시리얼 변환
     records = [_fix_dates(r) for r in records if r.get('성명', '')]
+    limit = int(config.get('debug_person_limit') or 0)
+    if limit > 0:
+        records = records[:limit]
     return records
 
 

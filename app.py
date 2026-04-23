@@ -160,7 +160,7 @@ if load_btn or 'records' in st.session_state:
 
         for i, rec in enumerate(records):
             name = rec.get('성명', f'{i+1}번')
-            status.text(f'생성 중: {name} ({i+1}/{total})')
+            status.text(f'생성 중: {name} ({i + 1}/{total})')
             try:
                 if override_dietitian:
                     rec = dict(rec)
