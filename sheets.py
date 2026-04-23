@@ -162,7 +162,12 @@ def _get_sheet_id(config=None) -> str:
     return config['sheet_id']
 
 
-_MEAL_PHOTO_HEADERS = ('식사사진첨부', '식사사진첨부2')
+_MEAL_PHOTO_HEADERS = (
+    '식사사진첨부',
+    '식사사진첨부2',
+    '식사사진등첨부',
+    '식사사진등첨부2',
+)
 
 
 def _extract_url_from_sheet_formula(formula: str) -> Optional[str]:
@@ -173,8 +178,8 @@ def _extract_url_from_sheet_formula(formula: str) -> Optional[str]:
     for pat in (
         r'HYPERLINK\s*\(\s*"([^"]+)"',
         r"HYPERLINK\s*\(\s*'([^']+)'",
-        r'=IMAGE\s*\(\s*"([^"]+)"',
-        r"=IMAGE\s*\(\s*'([^']+)'",
+        r'=\s*IMAGE\s*\(\s*"([^"]+)"',
+        r"=\s*IMAGE\s*\(\s*'([^']+)'",
     ):
         m = re.search(pat, s, re.I | re.DOTALL)
         if m:
@@ -203,14 +208,16 @@ def _resolve_image_formula_with_ampersand(formula: str, ws) -> Optional[str]:
     s = str(formula).strip()
     if 'IMAGE' not in s.upper() or '&' not in s:
         return None
+    # IMAGE(url, mode, …) 처럼 &셀 뒤에 쉼표 인자가 오는 경우가 많아, 첫 인자 끝은 ',' 또는 ')' 로 본다.
+    # 열 이름은 3글자 초과(예: AAAA)도 허용. '= IMAGE (' 처럼 공백도 허용.
     m = re.search(
-        r'=IMAGE\s*\(\s*"([^"]*)"\s*&\s*\$?([A-Za-z]{1,3})\$?(\d+)\s*\)',
+        r'=\s*IMAGE\s*\(\s*"([^"]*)"\s*&\s*\$?([A-Za-z]+)\$?(\d+)\s*(?:,|\))',
         s,
         re.I,
     )
     if not m:
         m = re.search(
-            r"=IMAGE\s*\(\s*'([^']*)'\s*&\s*\$?([A-Za-z]{1,3})\$?(\d+)\s*\)",
+            r"=\s*IMAGE\s*\(\s*'([^']*)'\s*&\s*\$?([A-Za-z]+)\$?(\d+)\s*(?:,|\))",
             s,
             re.I,
         )

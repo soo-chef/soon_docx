@@ -27,7 +27,7 @@
   행31 (3셀): 개별욕구제목 | 보호자 | [값]
   행33 (2셀): 영양사총평 | [값]
   행34 (1셀): 구역 제목(첨부)
-  행35 (2셀): 식사사진첨부(라벨) | [이미지 — `식사사진첨부`·`식사사진첨부2` URL, 2열이면 같은 줄에 나란히·크기 자동]
+  행35 (2셀): 식사사진첨부(라벨) | [이미지 — `식사사진첨부`·`식사사진첨부2` 또는 `식사사진등첨부`·`식사사진등첨부2` URL, 2열이면 같은 줄에 나란히·크기 자동]
 """
 import datetime
 import io
@@ -200,8 +200,22 @@ def _check_with_content(cell, selected_option, content=''):
 # ─────────────────────────────────────────
 
 _MAX_MEAL_PHOTO_BYTES = 15 * 1024 * 1024
-_MEAL_PHOTO_COL = '식사사진첨부'
-_MEAL_PHOTO_COL2 = '식사사진첨부2'
+# 시트 헤더에 '등' 유무(식사사진첨부 vs 식사사진등첨부)가 섞일 수 있어 둘 다 인식한다.
+_MEAL_PHOTO_NAMES = ('식사사진첨부', '식사사진등첨부')
+_MEAL_PHOTO2_NAMES = ('식사사진첨부2', '식사사진등첨부2')
+
+
+def _meal_photo_raw_from_record(data: dict, names: tuple, v_get) -> str:
+    """여러 헤더 표기 중 시트에 실제로 있는 키로 값을 찾는다."""
+    for name in names:
+        val = _record_value_strip_header_key(data, name, '')
+        if val is not None and str(val).strip():
+            return val
+    for name in names:
+        val = v_get(name, '')
+        if val is not None and str(val).strip():
+            return val
+    return ''
 
 
 def _record_value_strip_header_key(data: dict, logical_name: str, default=''):
@@ -715,12 +729,8 @@ def fill_document(data: dict, config=None) -> Document:
     _set_text(rows[33][1], v('영양사총평'), left_align=True)
 
     # ── 행35: 식사사진첨부 (오른쪽 셀 — 2열이 있으면 같은 줄 나란히, 크기 상한) ──
-    photo1 = _record_value_strip_header_key(data, _MEAL_PHOTO_COL, '') or v(
-        _MEAL_PHOTO_COL, ''
-    )
-    photo2 = _record_value_strip_header_key(data, _MEAL_PHOTO_COL2, '') or v(
-        _MEAL_PHOTO_COL2, ''
-    )
+    photo1 = _meal_photo_raw_from_record(data, _MEAL_PHOTO_NAMES, v)
+    photo2 = _meal_photo_raw_from_record(data, _MEAL_PHOTO2_NAMES, v)
     if str(photo1).strip() or str(photo2).strip():
         _insert_meal_photos_cell(rows[35][1], photo1, photo2, config=config)
 
