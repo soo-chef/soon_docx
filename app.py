@@ -11,6 +11,22 @@ import time
 
 import streamlit as st
 
+# 1) 혹시 남아 있는 config.json 삭제
+CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
+if os.path.exists(CONFIG_PATH):
+    os.remove(CONFIG_PATH)
+
+# 2) 세션 초기화 버튼
+if st.sidebar.button("세션 초기화"):
+    st.session_state.clear()
+    st.rerun()
+
+# 3) 현재 실제 값 확인
+st.sidebar.write("DEBUG sheet_id:", sheet_id)
+st.sidebar.write("DEBUG sheet_name:", sheet_name)
+
+
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 st.set_page_config(
