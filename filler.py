@@ -378,14 +378,29 @@ def _meal_image_dims_cm(data: bytes, max_w_cm: float, max_h_cm: float):
     return Cm(wc), Cm(hc)
 
 
+def _add_meal_images_inline_runs(para, blobs: list, max_each_w_cm: float, max_h_cm: float, gap: str = ' '):
+    """한 문단 안에 그림 run만 나란히(공백 간격). 옆 셀이 아니라 같은 셀·같은 줄(또는 자연 줄바꿈)."""
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    for idx, blob in enumerate(blobs):
+        if idx > 0:
+            para.add_run(gap)
+        w, h = _meal_image_dims_cm(blob, max_each_w_cm, max_h_cm)
+        run = para.add_run()
+        try:
+            run.add_picture(io.BytesIO(blob), width=w, height=h)
+        except Exception:
+            pass
+
+
 def _insert_meal_photos_cell(cell, raw_primary, raw_secondary=None, config=None):
     """
     식사사진첨부 칸에 이미지 삽입.
-    1열만 있으면 세로로 쌓음. 2열 URL이 모두 있으면 같은 행에 나란히(가운데 간격),
-    인덱스별로 짝을 맞춤. 크기는 상한 안에서 자동 축소(2페이지 내 쓰기 목적).
+    첫 번째·두 번째 사진은 같은 셀·같은 문단에서 한 칸 띄우고 옆에 배치한다(다음 표 셀 아님).
+    식사사진첨부2(또는 같은 열에 URL이 여러 개)가 있으면 첫 줄에 나란히, 더 있으면 아래 줄에 이어서.
     """
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.shared import Cm, Pt
+    from docx.shared import Pt
 
     urls_p = _parse_meal_photo_urls(raw_primary)
     urls_s = (
@@ -428,6 +443,19 @@ def _insert_meal_photos_cell(cell, raw_primary, raw_secondary=None, config=None)
         data = _apply_exif_orientation(data)
         imgs_s.append(data)
 
+    if os.environ.get('SOON_DOCX_DEBUG_MEAL_PHOTOS', '').strip().lower() in (
+        '1',
+        'true',
+        'yes',
+    ):
+        import sys
+
+        sys.stderr.write(
+            '[soon-docx meal-photo fetch] '
+            f'primary_urls={urls_p!r} secondary_urls={urls_s!r} '
+            f'downloaded_primary={len(imgs_p)} downloaded_secondary={len(imgs_s)}\n'
+        )
+
     if not imgs_p and not imgs_s:
         return
 
@@ -435,52 +463,48 @@ def _insert_meal_photos_cell(cell, raw_primary, raw_secondary=None, config=None)
     # 문단 인라인(그림 run 나란히)만 사용한다.
     _cell_strip_all_blocks(cell)
 
+    has_secondary = len(imgs_s) > 0
     n = max(len(imgs_p), len(imgs_s))
-    has_secondary_column = len(imgs_s) > 0
 
-    for i in range(n):
-        left = imgs_p[i] if i < len(imgs_p) else None
-        right = imgs_s[i] if i < len(imgs_s) else None
+    def add_spaced_paragraph(first=False):
+        p = cell.add_paragraph()
+        if not first:
+            p.paragraph_format.space_before = Pt(3)
+            p.paragraph_format.space_after = Pt(0)
+        return p
 
-        para = cell.add_paragraph()
-        if i > 0:
-            para.paragraph_format.space_before = Pt(3)
-            para.paragraph_format.space_after = Pt(0)
-
-        if left is not None and right is not None and has_secondary_column:
-            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            w1, h1 = _meal_image_dims_cm(left, _MEAL_PAIR_MAX_EACH_W_CM, _MEAL_PAIR_MAX_H_CM)
-            w2, h2 = _meal_image_dims_cm(right, _MEAL_PAIR_MAX_EACH_W_CM, _MEAL_PAIR_MAX_H_CM)
-            r1 = para.add_run()
-            try:
-                r1.add_picture(io.BytesIO(left), width=w1, height=h1)
-            except Exception:
-                pass
-            # 고정 폭 공백으로 간격 (중첩 표 없이)
-            para.add_run('\u2003\u2003')
-            r2 = para.add_run()
-            try:
-                r2.add_picture(io.BytesIO(right), width=w2, height=h2)
-            except Exception:
-                pass
-
-        elif left is not None:
-            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            w, h = _meal_image_dims_cm(left, _MEAL_SINGLE_MAX_W_CM, _MEAL_SINGLE_MAX_H_CM)
-            run = para.add_run()
-            try:
-                run.add_picture(io.BytesIO(left), width=w, height=h)
-            except Exception:
-                pass
-
-        elif right is not None:
-            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            w, h = _meal_image_dims_cm(right, _MEAL_SINGLE_MAX_W_CM, _MEAL_SINGLE_MAX_H_CM)
-            run = para.add_run()
-            try:
-                run.add_picture(io.BytesIO(right), width=w, height=h)
-            except Exception:
-                pass
+    if has_secondary:
+        # 같은 행 인덱스: 첫 칸·둘째 칸(시트 두 열) → 한 문단에서 옆으로
+        for i in range(n):
+            row_blobs = []
+            if i < len(imgs_p):
+                row_blobs.append(imgs_p[i])
+            if i < len(imgs_s):
+                row_blobs.append(imgs_s[i])
+            if not row_blobs:
+                continue
+            para = add_spaced_paragraph(first=(i == 0))
+            if len(row_blobs) >= 2:
+                _add_meal_images_inline_runs(
+                    para, row_blobs, _MEAL_PAIR_MAX_EACH_W_CM, _MEAL_PAIR_MAX_H_CM, gap=' '
+                )
+            else:
+                _add_meal_images_inline_runs(
+                    para, row_blobs, _MEAL_SINGLE_MAX_W_CM, _MEAL_SINGLE_MAX_H_CM, gap=' '
+                )
+    else:
+        # 식사사진첨부 열에만 URL이 여러 개: 두 장씩 한 문단에서 옆으로
+        for j in range(0, len(imgs_p), 2):
+            chunk = imgs_p[j : j + 2]
+            para = add_spaced_paragraph(first=(j == 0))
+            if len(chunk) >= 2:
+                _add_meal_images_inline_runs(
+                    para, chunk, _MEAL_PAIR_MAX_EACH_W_CM, _MEAL_PAIR_MAX_H_CM, gap=' '
+                )
+            else:
+                _add_meal_images_inline_runs(
+                    para, chunk, _MEAL_SINGLE_MAX_W_CM, _MEAL_SINGLE_MAX_H_CM, gap=' '
+                )
 
 
 def fill_document(data: dict, config=None) -> Document:
@@ -731,6 +755,21 @@ def fill_document(data: dict, config=None) -> Document:
     # ── 행35: 식사사진첨부 (오른쪽 셀 — 2열이 있으면 같은 줄 나란히, 크기 상한) ──
     photo1 = _meal_photo_raw_from_record(data, _MEAL_PHOTO_NAMES, v)
     photo2 = _meal_photo_raw_from_record(data, _MEAL_PHOTO2_NAMES, v)
+    if os.environ.get('SOON_DOCX_DEBUG_MEAL_PHOTOS', '').strip().lower() in (
+        '1',
+        'true',
+        'yes',
+    ):
+        import sys
+
+        _photo_keys = [k for k in data if '사진' in str(k)][:6]
+        sys.stderr.write(
+            '[soon-docx meal-photo] '
+            f'keys_sample={_photo_keys!r} '
+            f'parsed_primary={_parse_meal_photo_urls(photo1)!r} '
+            f'parsed_secondary={_parse_meal_photo_urls(photo2)!r} '
+            f'raw_primary={str(photo1)[:100]!r} raw_secondary={str(photo2)[:100]!r}\n'
+        )
     if str(photo1).strip() or str(photo2).strip():
         _insert_meal_photos_cell(rows[35][1], photo1, photo2, config=config)
 
