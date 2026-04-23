@@ -215,7 +215,39 @@ def _meal_photo_raw_from_record(data: dict, names: tuple, v_get) -> str:
         val = v_get(name, '')
         if val is not None and str(val).strip():
             return val
+    from sheets import meal_header_compact
+
+    compact_names = {meal_header_compact(n) for n in names}
+    for k, val in data.items():
+        if meal_header_compact(k) in compact_names:
+            if val is not None and str(val).strip():
+                return str(val).strip()
     return ''
+
+
+def meal_photo_secondary_nonempty(data: dict) -> bool:
+    """식사사진첨부2(또는 식사사진등첨부2) 열에 채워진 값이 있는지 — UI 디버그용."""
+
+    def v_get(key, default=''):
+        val = data.get(key, default)
+        if val is None:
+            return default
+        return val
+
+    raw = str(_meal_photo_raw_from_record(data, _MEAL_PHOTO2_NAMES, v_get)).strip()
+    if raw:
+        return True
+    # enrich 전·수식 문자열만 남은 행: 시트에는 IMAGE가 보여도 dict 값이 '='로 시작할 수 있음
+    from sheets import meal_header_compact
+
+    want = {meal_header_compact(n) for n in _MEAL_PHOTO2_NAMES}
+    for k, val in data.items():
+        if meal_header_compact(k) not in want:
+            continue
+        vs = '' if val is None else str(val).strip()
+        if vs.startswith(('=', 'http://', 'https://')):
+            return True
+    return False
 
 
 def _record_value_strip_header_key(data: dict, logical_name: str, default=''):

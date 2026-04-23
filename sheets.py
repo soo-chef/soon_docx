@@ -232,6 +232,23 @@ _MEAL_PHOTO_HEADERS = (
 )
 
 
+def meal_header_compact(s) -> str:
+    """
+    1행 헤더 비교용: NBSP·일반 공백 제거, 전각 숫자 → ASCII.
+    열 삽입/삭제 후 '식사사진 첨부2'처럼 띄어쓴 헤더가 있어도 코드의 '식사사진첨부2'와 맞춘다.
+    """
+    if s is None:
+        return ''
+    t = (
+        str(s)
+        .replace('\u00a0', ' ')
+        .replace('２', '2')
+        .replace('１', '1')
+        .replace('０', '0')
+    )
+    return re.sub(r'\s+', '', t)
+
+
 def _extract_url_from_sheet_formula(formula: str) -> Optional[str]:
     """=HYPERLINK(\"url\",...) / =IMAGE(\"url\") 등에서 첫 번째 URL 문자열 추출."""
     if not formula or not str(formula).strip().startswith('='):
@@ -319,12 +336,14 @@ def _enrich_one_photo_column(ws, records: list, header_name: str) -> None:
     header_canon = None
     header_raw = None
     target = header_name.strip()
+    target_c = meal_header_compact(header_name)
     for i, h in enumerate(headers):
         if h is None:
             continue
-        if str(h).strip() == target:
+        hs = str(h).strip()
+        if hs == target or meal_header_compact(h) == target_c:
             col_idx = i + 1
-            header_canon = str(h).strip()
+            header_canon = hs
             header_raw = str(h) if h is not None else header_canon
             break
     if col_idx is None:
@@ -349,7 +368,16 @@ def _enrich_one_photo_column(ws, records: list, header_name: str) -> None:
         fcell = formula_rows[i][0]
         fcell = '' if fcell is None else str(fcell)
         url = _extract_url_from_sheet_formula(fcell)
-        if not url or _is_truncated_drive_view_url(url):
+        # usercontent.google.com/...&id="&BX2 처럼 첫 인자에 id= 만 있고 파일키는 &뒤 셀인 경우:
+        # _is_truncated_drive_view_url 은 'drive.google.com' 문자열만 보더라 usercontent 는 병합을 건너뜀 → BU만 되고 BV 실패.
+        incomplete_concat_id = (
+            url
+            and 'id=' in url
+            and '&' in fcell
+            and 'IMAGE' in fcell.upper()
+            and not re.search(r'id=[A-Za-z0-9_-]{10,}', url)
+        )
+        if not url or _is_truncated_drive_view_url(url) or incomplete_concat_id:
             merged = _resolve_image_formula_with_ampersand(fcell, ws)
             if merged:
                 url = merged
@@ -366,10 +394,11 @@ def _enrich_one_photo_column(ws, records: list, header_name: str) -> None:
                     url = cur.strip()
                     break
         if url:
-            # gspread 키는 1행 셀 원문일 수 있어, 정규화 키와 원문 키 둘 다 채운다.
-            rec[header_canon] = url
-            if header_raw != header_canon:
-                rec[header_raw] = url
+            # gspread 키가 1행과 문자 단위로 같아야 하므로, 같은 열로 보이는 모든 dict 키에 반영.
+            hk = meal_header_compact(header_canon)
+            for rk in list(rec.keys()):
+                if meal_header_compact(rk) == hk:
+                    rec[rk] = url
 
 
 def enrich_meal_photo_urls(ws, records: list) -> None:
