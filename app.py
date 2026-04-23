@@ -13,23 +13,6 @@ import streamlit as st
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# 1) 혹시 남아 있는 config.json 삭제
-CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
-if os.path.exists(CONFIG_PATH):
-    os.remove(CONFIG_PATH)
-
-# 2) 세션 초기화 버튼
-if st.sidebar.button("세션 초기화"):
-    st.session_state.clear()
-    st.rerun()
-
-# 3) 현재 실제 값 확인
-st.sidebar.write("DEBUG sheet_id:", sheet_id)
-st.sidebar.write("DEBUG sheet_name:", sheet_name)
-
-
-
-
 
 st.set_page_config(
     page_title='영양사정기록지 자동 출력',
@@ -48,6 +31,25 @@ config = {
     'sheet_id': sheet_id,
     'sheet_name': sheet_name,
 }
+
+# 1) 혹시 남아 있는 config.json 삭제
+CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
+if os.path.exists(CONFIG_PATH):
+    os.remove(CONFIG_PATH)
+
+# 2) 세션 초기화 버튼
+if st.sidebar.button("세션 초기화"):
+    st.session_state.clear()
+    st.rerun()
+
+# 3) 현재 실제 값 확인
+st.sidebar.write("DEBUG sheet_id:", sheet_id)
+st.sidebar.write("DEBUG sheet_name:", sheet_name)
+
+
+
+
+
 
 # ─────────────────────────────────────────
 # 사이드바: 설정(읽기 전용)
