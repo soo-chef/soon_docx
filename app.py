@@ -13,7 +13,6 @@ import streamlit as st
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-
 st.set_page_config(
     page_title='영양사정기록지 자동 출력',
     page_icon='📋',
@@ -31,25 +30,6 @@ config = {
     'sheet_id': sheet_id,
     'sheet_name': sheet_name,
 }
-
-# 1) 혹시 남아 있는 config.json 삭제
-CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
-if os.path.exists(CONFIG_PATH):
-    os.remove(CONFIG_PATH)
-
-# 2) 세션 초기화 버튼
-if st.sidebar.button("세션 초기화"):
-    st.session_state.clear()
-    st.rerun()
-
-# 3) 현재 실제 값 확인
-st.sidebar.write("DEBUG sheet_id:", sheet_id)
-st.sidebar.write("DEBUG sheet_name:", sheet_name)
-
-
-
-
-
 
 # ─────────────────────────────────────────
 # 사이드바: 설정(읽기 전용)
@@ -127,9 +107,17 @@ if load_btn or 'records' in st.session_state:
                 records = sheets.get_all_records(cfg)
             st.session_state['records'] = records
             st.success(f'총 {len(records)}명 데이터 불러옴')
+        # except Exception as e:
+        #     st.error(f'데이터 불러오기 실패: {e}')
+        #     st.stop()
+
         except Exception as e:
-            st.error(f'데이터 불러오기 실패: {e}')
+            import traceback
+            st.error(f'데이터 불러오기 실패: {type(e).__name__}: {repr(e)}')
+            st.code(traceback.format_exc())
             st.stop()
+
+
 
     records = st.session_state.get('records', [])
 
