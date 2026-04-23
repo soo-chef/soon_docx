@@ -980,14 +980,13 @@ def _rebalance_tbl_grid_first_col_for_lo_pdf(doc: Document):
 def save_document(doc: Document, name: str) -> str:
     """output/ 폴더에 저장 후 경로 반환"""
     if platform.system() != 'Windows':
-        # 라벨 문단 공백만 정리 (LibreOffice PDF 줄바꿈 완화). tblGrid/tcW는 건드리지 않음 —
-        # 예전에는 첫 열·gridCol을 다시 잡는 함수가 있었는데, 템플릿에서 맞춘 열 너비(성명 행 등)가
-        # Streamlit(Linux) 저장 시에만 덮어씌워져 로컬(Windows)과 달라지는 문제가 있었다.
+        # LibreOffice(headless) PDF는 Word보다 w:tblGrid·첫 열 폭을 빡세게 적용해
+        # 라벨이 글자 단위로 세로 깨지거나 페이지가 어긋난다. Linux/클라우드 저장 시 항상 보정한다.
+        # (Windows는 Word/docx2pdf 경로라 동일 보정을 하지 않음 — 로컬 미리보기는 템플릿에 가깝게 유지)
         _normalize_lo_label_cells_for_pdf(doc)
         _widen_individual_needs_sublabels_for_lo_pdf(doc)
-        if os.environ.get('SOON_DOCX_LO_GRID_FIX', '').strip() in ('1', 'true', 'yes'):
-            _widen_first_column_labels_for_lo_pdf(doc)
-            _rebalance_tbl_grid_first_col_for_lo_pdf(doc)
+        _widen_first_column_labels_for_lo_pdf(doc)
+        _rebalance_tbl_grid_first_col_for_lo_pdf(doc)
     # 파일 이름에 사용 불가 문자 제거
     safe_name = re.sub(r'[\\/:*?"<>|]', '_', name)
     path = os.path.join(OUTPUT_DIR, f'{safe_name}.docx')
