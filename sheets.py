@@ -184,6 +184,57 @@ def _extract_url_from_sheet_formula(formula: str) -> Optional[str]:
     return None
 
 
+def _is_truncated_drive_view_url(url: str) -> bool:
+    """=IMAGE(\"...id=\"&BW2) 처럼 첫 인자만 파싱되면 id 뒤 파일키가 비어 있는 URL."""
+    u = (url or '').strip()
+    if not u.startswith(('http://', 'https://')):
+        return False
+    if 'drive.google.com' not in u or 'id=' not in u:
+        return False
+    return not re.search(r'id=[A-Za-z0-9_-]{10,}', u)
+
+
+def _resolve_image_formula_with_ampersand(formula: str, ws) -> Optional[str]:
+    """
+    =IMAGE(\"https://...id=\"&BW2) 형태: 따옴표 문자열 뒤에 & 로 셀 참조가 붙은 수식.
+    참조 셀 값을 이어 붙여 완성 URL을 만든다. (시트 화면에는 IMAGE로 잘 보여도
+    API는 첫 번째 문자열만 주는 경우가 많아 docx 쪽으로 URL이 넘어가지 않던 원인)
+    """
+    s = str(formula).strip()
+    if 'IMAGE' not in s.upper() or '&' not in s:
+        return None
+    m = re.search(
+        r'=IMAGE\s*\(\s*"([^"]*)"\s*&\s*\$?([A-Za-z]{1,3})\$?(\d+)\s*\)',
+        s,
+        re.I,
+    )
+    if not m:
+        m = re.search(
+            r"=IMAGE\s*\(\s*'([^']*)'\s*&\s*\$?([A-Za-z]{1,3})\$?(\d+)\s*\)",
+            s,
+            re.I,
+        )
+    if not m:
+        return None
+    prefix, col, row_s = m.group(1), m.group(2).upper(), m.group(3)
+    a1 = f'{col}{row_s}'
+    try:
+        part2 = ws.acell(a1).value
+    except Exception:
+        return None
+    if part2 is None:
+        return None
+    part2 = str(part2).strip()
+    if not part2 or part2 in ('#N/A', '#REF!', '#ERROR!') or '찾을 수 없음' in part2:
+        return None
+    merged = prefix + part2
+    if merged.startswith(('http://', 'https://')):
+        return merged
+    if part2.startswith(('http://', 'https://')):
+        return part2
+    return None
+
+
 def _enrich_one_photo_column(ws, records: list, header_name: str) -> None:
     """
     한 열에 대해 Drive 링크·HYPERLINK 수식 → 레코드에 실제 URL 반영.
@@ -227,6 +278,10 @@ def _enrich_one_photo_column(ws, records: list, header_name: str) -> None:
         fcell = formula_rows[i][0]
         fcell = '' if fcell is None else str(fcell)
         url = _extract_url_from_sheet_formula(fcell)
+        if not url or _is_truncated_drive_view_url(url):
+            merged = _resolve_image_formula_with_ampersand(fcell, ws)
+            if merged:
+                url = merged
         if not url and formatted_rows and i < len(formatted_rows) and formatted_rows[i]:
             fc = formatted_rows[i][0]
             if isinstance(fc, str) and fc.strip().startswith(('http://', 'https://')):
