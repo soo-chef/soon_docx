@@ -247,14 +247,16 @@ def _enrich_one_photo_column(ws, records: list, header_name: str) -> None:
         return
 
     col_idx = None
-    actual_key = None
+    header_canon = None
+    header_raw = None
     target = header_name.strip()
     for i, h in enumerate(headers):
         if h is None:
             continue
         if str(h).strip() == target:
             col_idx = i + 1
-            actual_key = h
+            header_canon = str(h).strip()
+            header_raw = str(h) if h is not None else header_canon
             break
     if col_idx is None:
         return
@@ -287,11 +289,18 @@ def _enrich_one_photo_column(ws, records: list, header_name: str) -> None:
             if isinstance(fc, str) and fc.strip().startswith(('http://', 'https://')):
                 url = fc.strip()
         if not url:
-            cur = rec.get(actual_key, '')
-            if isinstance(cur, str) and cur.strip().startswith(('http://', 'https://')):
-                url = cur.strip()
+            for key_try in (header_canon, header_raw):
+                if key_try is None:
+                    continue
+                cur = rec.get(key_try, '')
+                if isinstance(cur, str) and cur.strip().startswith(('http://', 'https://')):
+                    url = cur.strip()
+                    break
         if url:
-            rec[actual_key] = url
+            # gspread 키는 1행 셀 원문일 수 있어, 정규화 키와 원문 키 둘 다 채운다.
+            rec[header_canon] = url
+            if header_raw != header_canon:
+                rec[header_raw] = url
 
 
 def enrich_meal_photo_urls(ws, records: list) -> None:

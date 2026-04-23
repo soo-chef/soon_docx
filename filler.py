@@ -202,6 +202,27 @@ def _check_with_content(cell, selected_option, content=''):
 _MAX_MEAL_PHOTO_BYTES = 15 * 1024 * 1024
 _MEAL_PHOTO_COL = '식사사진첨부'
 _MEAL_PHOTO_COL2 = '식사사진첨부2'
+
+
+def _record_value_strip_header_key(data: dict, logical_name: str, default=''):
+    """
+    시트 1행 헤더에 보이지 않는 공백·NBSP 등이 있으면 get_all_records 키가
+    logical_name 과 달라질 수 있다. strip 기준으로 같은 열 값을 찾는다.
+    """
+    if not data or not logical_name:
+        return default
+    want = logical_name.strip()
+    if want in data:
+        val = data.get(want, default)
+        if val is None:
+            return default
+        return val
+    for k, val in data.items():
+        if str(k).strip() == want:
+            if val is None:
+                return default
+            return val
+    return default
 # 한 장·두 장 모두 세로로 과도하게 늘어나지 않도록 상한 (cm). 2열 나란히 시 각 칸·행 높이 기준.
 _MEAL_SINGLE_MAX_W_CM = 11.5
 _MEAL_SINGLE_MAX_H_CM = 7.0
@@ -694,8 +715,12 @@ def fill_document(data: dict, config=None) -> Document:
     _set_text(rows[33][1], v('영양사총평'), left_align=True)
 
     # ── 행35: 식사사진첨부 (오른쪽 셀 — 2열이 있으면 같은 줄 나란히, 크기 상한) ──
-    photo1 = v(_MEAL_PHOTO_COL, '')
-    photo2 = v(_MEAL_PHOTO_COL2, '')
+    photo1 = _record_value_strip_header_key(data, _MEAL_PHOTO_COL, '') or v(
+        _MEAL_PHOTO_COL, ''
+    )
+    photo2 = _record_value_strip_header_key(data, _MEAL_PHOTO_COL2, '') or v(
+        _MEAL_PHOTO_COL2, ''
+    )
     if str(photo1).strip() or str(photo2).strip():
         _insert_meal_photos_cell(rows[35][1], photo1, photo2, config=config)
 
