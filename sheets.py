@@ -96,43 +96,105 @@ def _drive_file_id_from_url(url: str) -> Optional[str]:
     if m:
         return m.group(1)
     parsed = urlparse(url)
-    if parsed.netloc in ('drive.google.com', 'docs.google.com'):
+    if parsed.netloc in (
+        'drive.google.com',
+        'docs.google.com',
+        'drive.usercontent.google.com',
+    ):
         qs = parse_qs(parsed.query)
         if 'id' in qs and qs['id']:
             return qs['id'][0]
     return None
 
 
+def _http_get_bytes(url: str, *, timeout: int) -> tuple:
+    """(bytes, email.message.Message | None) — urllib 응답 본문과 헤더."""
+    req = urllib.request.Request(
+        url,
+        headers={'User-Agent': 'Mozilla/5.0 (compatible; soon-docx/1.0)'},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read(), resp.info()
+
+
+def _bytes_look_like_image(data: bytes, headers=None) -> bool:
+    """Drive HTML 안내·바이러스 스캔 페이지 등을 걸러낸다."""
+    if not data or len(data) < 50:
+        return False
+    if headers is not None:
+        ct = str(headers.get('Content-Type', '') or '').lower()
+        if 'text/html' in ct:
+            return False
+        if 'image' in ct:
+            return True
+    head = data.lstrip()[:500].lower()
+    if head.startswith(b'<!doctype') or head.startswith(b'<html'):
+        return False
+    if data[:3] == b'\xff\xd8\xff':
+        return True
+    if len(data) >= 8 and data[:8] == b'\x89PNG\r\n\x1a\n':
+        return True
+    if data[:6] in (b'GIF87a', b'GIF89a'):
+        return True
+    if len(data) >= 12 and data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+        return True
+    return False
+
+
 def fetch_image_bytes(url: str, creds: Optional[Credentials] = None, *, timeout=60) -> bytes:
     """
     공개 http(s) URL 또는 Google Drive 공유 링크에서 이미지 바이트를 가져온다.
-    Drive는 서비스 계정으로 alt=media 다운로드 — 파일을 해당 client_email과 공유해야 한다.
+    우선 Drive v3 alt=media(서비스 계정). 실패·무인증·usercontent 링크 등은
+    원본 URL 및 uc?export=… 형태로 HTTP 직접 수신을 시도한다.
     """
     url = (url or '').strip()
     if not url.startswith(('http://', 'https://')):
         raise ValueError('http(s) URL이 아닙니다.')
 
     fid = _drive_file_id_from_url(url)
+
+    if fid and creds is not None:
+        try:
+            from google.auth.transport.requests import Request as GoogleAuthRequest
+
+            creds.refresh(GoogleAuthRequest())
+            media_url = f'https://www.googleapis.com/drive/v3/files/{fid}?alt=media'
+            req = urllib.request.Request(
+                media_url,
+                headers={'Authorization': f'Bearer {creds.token}'},
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = resp.read()
+                api_hdrs = resp.info()
+            if _bytes_look_like_image(data, api_hdrs):
+                return data
+        except Exception:
+            pass
+
     if fid:
-        if creds is None:
-            raise ValueError('Drive에서 받으려면 서비스 계정 인증이 필요합니다.')
-        from google.auth.transport.requests import Request as GoogleAuthRequest
+        candidates = []
+        for u in (
+            url,
+            f'https://drive.google.com/uc?export=download&id={fid}',
+            f'https://drive.google.com/uc?export=view&id={fid}',
+        ):
+            if u not in candidates:
+                candidates.append(u)
+        last_err = None
+        for u in candidates:
+            try:
+                data, hdrs = _http_get_bytes(u, timeout=timeout)
+                if _bytes_look_like_image(data, hdrs):
+                    return data
+            except Exception as e:
+                last_err = e
+                continue
+        if last_err is not None:
+            raise last_err
+        raise ValueError('Drive 이미지 URL에서 유효한 바이너리를 받지 못했습니다.')
 
-        creds.refresh(GoogleAuthRequest())
-        media_url = f'https://www.googleapis.com/drive/v3/files/{fid}?alt=media'
-        req = urllib.request.Request(
-            media_url,
-            headers={'Authorization': f'Bearer {creds.token}'},
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read()
-
-    req = urllib.request.Request(
-        url,
-        headers={'User-Agent': 'Mozilla/5.0 (compatible; soon-docx/1.0)'},
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+    data, _hdrs = _http_get_bytes(url, timeout=timeout)
+    return data
 
 
 def _get_sheet_id(config=None) -> str:
